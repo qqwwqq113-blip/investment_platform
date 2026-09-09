@@ -24,7 +24,7 @@
         <form id="auth-form">
           <label>이메일<input id="email" type="email" autocomplete="email" required /></label>
           <label>비밀번호<input id="password" type="password" autocomplete="current-password" minlength="8" required /></label>
-          <div class="actions"><button type="submit">로그인</button><button type="button" id="sign-up" class="ghost">계정 만들기</button></div>
+          <div class="actions"><button type="submit">로그인</button></div>
           <p id="auth-message" class="message" role="status"></p>
         </form>
       </section>
@@ -35,6 +35,11 @@
           <article class="metric"><span>순투입금</span><strong id="net-invested">₩0</strong></article>
           <article class="metric"><span>매수 원금</span><strong id="cost-basis">₩0</strong></article>
           <article class="metric"><span>보유 종목</span><strong id="holding-count">0</strong></article>
+        </section>
+
+        <section class="card history-card">
+          <div class="section-heading"><div><h2>자산 추이</h2><p id="history-summary" class="subtle">저장된 일별 스냅샷을 불러오는 중입니다.</p></div><span id="history-range" class="chart-range"></span></div>
+          <div id="history-chart" class="history-chart" role="img" aria-label="일별 총자산 추이 차트"></div>
         </section>
 
         <div class="grid">

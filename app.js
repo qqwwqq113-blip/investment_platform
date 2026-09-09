@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const supabaseUrl = 'https://spzrzptymyulmxhmjbvk.supabase.co';
 const supabaseKey = 'sb_publishable_erhED6hEL6zVgD70qz_Q5A_Q1k6E9QR';
 const supabase = createClient(supabaseUrl, supabaseKey);
-const won = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
 
 const byId = (id) => document.getElementById(id);
@@ -29,34 +29,64 @@ function holdingsFrom(rows) {
   return [...holdings.values()].filter((h) => h.quantity > 0.0000001);
 }
 
-function render(rows) {
+function renderHistory(snapshots) {
+  const chart = byId('history-chart');
+  const summary = byId('history-summary');
+  const range = byId('history-range');
+  if (!snapshots.length) {
+    chart.innerHTML = '<p class="empty-chart">아직 저장된 일별 스냅샷이 없습니다.</p>';
+    summary.textContent = '거래 기록은 정상적으로 관리됩니다. 이후 스냅샷을 저장하면 추이가 표시됩니다.';
+    range.textContent = '';
+    return;
+  }
+  const points = [...snapshots].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date));
+  const values = points.map((point) => Number(point.total_equity));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const padding = Math.max((max - min) * 0.12, 1);
+  const low = min - padding;
+  const high = max + padding;
+  const width = 720;
+  const height = 230;
+  const x = (index) => points.length === 1 ? width / 2 : 24 + index * ((width - 48) / (points.length - 1));
+  const y = (value) => 18 + (high - value) * ((height - 48) / (high - low));
+  const line = points.map((point, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(1)} ${y(Number(point.total_equity)).toFixed(1)}`).join(' ');
+  const area = `${line} L ${x(points.length - 1).toFixed(1)} ${height - 22} L ${x(0).toFixed(1)} ${height - 22} Z`;
+  const last = values.at(-1);
+  const first = values[0];
+  const change = last - first;
+  const changePct = first ? (change / first) * 100 : 0;
+  chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#64a4ff" stop-opacity=".35"/><stop offset="100%" stop-color="#64a4ff" stop-opacity="0"/></linearGradient></defs><path d="${area}" fill="url(#area)"/><path d="${line}" fill="none" stroke="#7fb2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${points.map((point, index) => `<circle cx="${x(index).toFixed(1)}" cy="${y(Number(point.total_equity)).toFixed(1)}" r="${index === points.length - 1 ? 5 : 2.5}" fill="#cfe4ff"><title>${point.snapshot_date}: ${usd.format(Number(point.total_equity))}</title></circle>`).join('')}</svg>`;
+  summary.textContent = `최근 자산 ${usd.format(last)} · 시작 대비 ${change >= 0 ? '+' : ''}${usd.format(change)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%)`;
+  range.textContent = `${points[0].snapshot_date} — ${points.at(-1).snapshot_date}`;
+}
+
+function render(rows, snapshots) {
   const totalDeposits = rows.filter(r => r.trade_type === 'DEPOSIT').reduce((s,r) => s + Number(r.amount), 0);
   const totalWithdrawals = rows.filter(r => r.trade_type === 'WITHDRAW').reduce((s,r) => s + Number(r.amount), 0);
   const holdings = holdingsFrom([...rows].reverse());
-  byId('net-invested').textContent = won.format(totalDeposits - totalWithdrawals);
-  byId('cost-basis').textContent = won.format(holdings.reduce((s,h) => s + h.cost, 0));
+  byId('net-invested').textContent = usd.format(totalDeposits - totalWithdrawals);
+  byId('cost-basis').textContent = usd.format(holdings.reduce((s,h) => s + h.cost, 0));
   byId('holding-count').textContent = String(holdings.length);
-  byId('holdings-body').innerHTML = holdings.length ? holdings.map(h => `<tr><td>${h.ticker}</td><td>${number.format(h.quantity)}</td><td>${won.format(h.cost / h.quantity)}</td><td>${won.format(h.cost)}</td></tr>`).join('') : '<tr><td colspan="4">아직 보유 종목이 없습니다.</td></tr>';
-  byId('transactions-body').innerHTML = rows.length ? rows.map(r => `<tr><td>${new Date(r.traded_at).toLocaleString('ko-KR')}</td><td>${r.trade_type}</td><td>${r.ticker}</td><td>${number.format(r.quantity)}</td><td>${won.format(r.amount)}</td><td>${won.format(r.fee)}</td><td><button data-delete="${r.id}">삭제</button></td></tr>`).join('') : '<tr><td colspan="7">아직 저장된 거래가 없습니다.</td></tr>';
+  byId('holdings-body').innerHTML = holdings.length ? holdings.map(h => `<tr><td>${h.ticker}</td><td>${number.format(h.quantity)}</td><td>${usd.format(h.cost / h.quantity)}</td><td>${usd.format(h.cost)}</td></tr>`).join('') : '<tr><td colspan="4">아직 보유 종목이 없습니다.</td></tr>';
+  byId('transactions-body').innerHTML = rows.length ? rows.map(r => `<tr><td>${new Date(r.traded_at).toLocaleString('ko-KR')}</td><td>${r.trade_type}</td><td>${r.ticker}</td><td>${number.format(r.quantity)}</td><td>${usd.format(r.amount)}</td><td>${usd.format(r.fee)}</td><td><button data-delete="${r.id}">삭제</button></td></tr>`).join('') : '<tr><td colspan="7">아직 저장된 거래가 없습니다.</td></tr>';
+  renderHistory(snapshots);
 }
 
 async function loadData() {
   notice('불러오는 중…');
-  const { data, error } = await supabase.from('transactions').select('*').order('traded_at', { ascending: false });
-  if (error) { notice(`데이터를 불러오지 못했습니다: ${error.message}`, true); return; }
-  render(data); notice('');
+  const [transactionsResult, snapshotsResult] = await Promise.all([
+    supabase.from('transactions').select('*').order('traded_at', { ascending: false }),
+    supabase.from('daily_snapshots').select('snapshot_date,total_equity').order('snapshot_date', { ascending: true })
+  ]);
+  if (transactionsResult.error || snapshotsResult.error) { notice(`데이터를 불러오지 못했습니다: ${(transactionsResult.error || snapshotsResult.error).message}`, true); return; }
+  render(transactionsResult.data, snapshotsResult.data); notice('');
 }
 
 byId('auth-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const email = byId('email').value.trim(); const password = byId('password').value;
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   byId('auth-message').textContent = error ? error.message : '';
-  byId('auth-message').classList.toggle('error', Boolean(error));
-});
-byId('sign-up').addEventListener('click', async () => {
-  const email = byId('email').value.trim(); const password = byId('password').value;
-  const { error } = await supabase.auth.signUp({ email, password });
-  byId('auth-message').textContent = error ? error.message : '확인 이메일을 보냈습니다. 이메일 인증 후 로그인하세요.';
   byId('auth-message').classList.toggle('error', Boolean(error));
 });
 byId('sign-out').addEventListener('click', () => supabase.auth.signOut());
