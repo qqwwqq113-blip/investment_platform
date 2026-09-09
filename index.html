@@ -37,6 +37,16 @@
           <article class="metric"><span>보유 종목</span><strong id="holding-count">0</strong></article>
         </section>
 
+        <section class="card allocation-card">
+          <div class="section-heading"><div><h2>자산 비중과 리밸런싱</h2><p class="subtle">현재 비중은 입력된 거래의 매입 원금·현금 잔액 기준입니다.</p></div><span id="allocation-status" class="status-pill">계산 중</span></div>
+          <div class="allocation-grid">
+            <div class="donut-panel"><h3>현재 자산 비중</h3><div id="current-donut" class="donut-wrap"></div></div>
+            <div class="donut-panel"><h3>목표 자산 비중</h3><div id="target-donut" class="donut-wrap"></div></div>
+            <div class="target-panel"><h3>목표 비중 설정</h3><form id="target-form" class="target-form"><label>QQQ (%)<input id="target-qqq" type="number" min="0" max="100" step="1" required /></label><label>QLD (%)<input id="target-qld" type="number" min="0" max="100" step="1" required /></label><label>SGOV (%)<input id="target-sgov" type="number" min="0" max="100" step="1" required /></label><button type="submit">목표 비중 저장</button><p id="target-message" class="message" role="status"></p></form></div>
+          </div>
+          <div class="table-wrap allocation-table"><table><thead><tr><th>자산</th><th>현재 비중</th><th>목표 비중</th><th>괴리도</th><th>점검</th></tr></thead><tbody id="allocation-body"></tbody></table></div>
+        </section>
+
         <section class="card history-card">
           <div class="section-heading"><div><h2>자산 추이</h2><p id="history-summary" class="subtle">저장된 일별 스냅샷을 불러오는 중입니다.</p></div><span id="history-range" class="chart-range"></span></div>
           <div id="history-chart" class="history-chart" role="img" aria-label="일별 총자산 추이 차트"></div>

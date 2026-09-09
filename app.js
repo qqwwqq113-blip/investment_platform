@@ -5,6 +5,9 @@ const supabaseKey = 'sb_publishable_erhED6hEL6zVgD70qz_Q5A_Q1k6E9QR';
 const supabase = createClient(supabaseUrl, supabaseKey);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
+const defaultTargets = { QQQ: 10, QLD: 70, SGOV: 20 };
+const colors = { QQQ: '#64a4ff', QLD: '#f5a524', SGOV: '#44c18a', CASH: '#8fa3b8' };
+let currentUser = null;
 
 const byId = (id) => document.getElementById(id);
 const notice = (text, isError = false) => { const el = byId('notice'); el.textContent = text; el.classList.toggle('error', isError); };
@@ -27,6 +30,58 @@ function holdingsFrom(rows) {
     holdings.set(row.ticker, h);
   }
   return [...holdings.values()].filter((h) => h.quantity > 0.0000001);
+}
+
+function targetAllocations() {
+  const saved = currentUser?.user_metadata?.target_allocations;
+  if (!saved || typeof saved !== 'object') return { ...defaultTargets };
+  return Object.fromEntries(Object.keys(defaultTargets).map((ticker) => [ticker, Number(saved[ticker]) || 0]));
+}
+
+function cashFrom(rows) {
+  return [...rows].reverse().reduce((cash, row) => {
+    const amount = Number(row.amount); const fee = Number(row.fee);
+    if (row.trade_type === 'DEPOSIT') return cash + amount;
+    if (row.trade_type === 'WITHDRAW') return cash - amount;
+    if (row.trade_type === 'BUY') return cash - amount - fee;
+    if (row.trade_type === 'SELL') return cash + amount - fee;
+    return cash;
+  }, 0);
+}
+
+function renderDonut(elementId, items, label) {
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  const visible = items.filter((item) => item.value > 0);
+  if (total <= 0 || !visible.length) { byId(elementId).innerHTML = '<p class="empty-chart">표시할 자산이 없습니다.</p>'; return; }
+  let cursor = 0;
+  const stops = visible.map((item) => { const start = cursor; cursor += item.value / total * 100; return `${colors[item.ticker] || '#7f8ea3'} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`; }).join(', ');
+  byId(elementId).innerHTML = `<div class="donut" style="background:conic-gradient(${stops})"><div><strong>${label}</strong><span>${usd.format(total)}</span></div></div><ul class="legend">${visible.map((item) => `<li><i style="background:${colors[item.ticker] || '#7f8ea3'}"></i><span>${item.ticker}</span><b>${(item.value / total * 100).toFixed(1)}%</b></li>`).join('')}</ul>`;
+}
+
+function renderAllocation(rows, holdings) {
+  const targets = targetAllocations();
+  const cash = Math.max(0, cashFrom(rows));
+  const current = Object.fromEntries(holdings.map((holding) => [holding.ticker, holding.cost]));
+  current.CASH = cash;
+  const total = Object.values(current).reduce((sum, value) => sum + value, 0);
+  const targetItems = Object.entries(targets).map(([ticker, value]) => ({ ticker, value }));
+  const currentItems = [...new Set([...Object.keys(targets), ...Object.keys(current)])].map((ticker) => ({ ticker, value: current[ticker] || 0 }));
+  renderDonut('current-donut', currentItems, '현재');
+  renderDonut('target-donut', targetItems, '목표');
+  const allTickers = [...new Set([...Object.keys(targets), ...Object.keys(current)])];
+  const driftRows = allTickers.map((ticker) => {
+    const currentWeight = total ? (current[ticker] || 0) / total * 100 : 0;
+    const target = targets[ticker] || 0;
+    const drift = currentWeight - target;
+    const action = ticker === 'CASH' ? (currentWeight > 5 ? '현금 활용 검토' : '유지') : drift > 5 ? '비중 축소 검토' : drift < -5 ? '추가 매수 검토' : '양호';
+    return { ticker, currentWeight, target, drift, action };
+  });
+  const alerts = driftRows.filter((row) => row.ticker !== 'CASH' && Math.abs(row.drift) > 5).length;
+  const pill = byId('allocation-status');
+  pill.textContent = alerts ? `점검 필요 ${alerts}개` : '목표 범위 양호';
+  pill.classList.toggle('warning', Boolean(alerts));
+  byId('allocation-body').innerHTML = driftRows.map((row) => `<tr><td>${row.ticker}</td><td>${row.currentWeight.toFixed(1)}%</td><td>${row.target.toFixed(1)}%</td><td class="${Math.abs(row.drift) > 5 ? 'drift-alert' : ''}">${row.drift >= 0 ? '+' : ''}${row.drift.toFixed(1)}%p</td><td>${row.action}</td></tr>`).join('');
+  for (const [ticker, value] of Object.entries(targets)) byId(`target-${ticker.toLowerCase()}`).value = value;
 }
 
 function renderHistory(snapshots) {
@@ -70,6 +125,7 @@ function render(rows, snapshots) {
   byId('holding-count').textContent = String(holdings.length);
   byId('holdings-body').innerHTML = holdings.length ? holdings.map(h => `<tr><td>${h.ticker}</td><td>${number.format(h.quantity)}</td><td>${usd.format(h.cost / h.quantity)}</td><td>${usd.format(h.cost)}</td></tr>`).join('') : '<tr><td colspan="4">아직 보유 종목이 없습니다.</td></tr>';
   byId('transactions-body').innerHTML = rows.length ? rows.map(r => `<tr><td>${new Date(r.traded_at).toLocaleString('ko-KR')}</td><td>${r.trade_type}</td><td>${r.ticker}</td><td>${number.format(r.quantity)}</td><td>${usd.format(r.amount)}</td><td>${usd.format(r.fee)}</td><td><button data-delete="${r.id}">삭제</button></td></tr>`).join('') : '<tr><td colspan="7">아직 저장된 거래가 없습니다.</td></tr>';
+  renderAllocation(rows, holdings);
   renderHistory(snapshots);
 }
 
@@ -90,6 +146,16 @@ byId('auth-form').addEventListener('submit', async (event) => {
   byId('auth-message').classList.toggle('error', Boolean(error));
 });
 byId('sign-out').addEventListener('click', () => supabase.auth.signOut());
+byId('target-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const targets = Object.fromEntries(Object.keys(defaultTargets).map((ticker) => [ticker, Number(byId(`target-${ticker.toLowerCase()}`).value)]));
+  const total = Object.values(targets).reduce((sum, value) => sum + value, 0);
+  const message = byId('target-message');
+  if (Object.values(targets).some((value) => !Number.isFinite(value) || value < 0) || total !== 100) { message.textContent = `합계가 정확히 100%여야 합니다. 현재 ${total}%`; message.classList.add('error'); return; }
+  const { data, error } = await supabase.auth.updateUser({ data: { target_allocations: targets } });
+  if (error) { message.textContent = `저장하지 못했습니다: ${error.message}`; message.classList.add('error'); return; }
+  currentUser = data.user; message.textContent = '목표 비중을 저장했습니다.'; message.classList.remove('error'); await loadData();
+});
 byId('refresh').addEventListener('click', loadData);
 byId('trade-type').addEventListener('change', () => { const cash = ['DEPOSIT', 'WITHDRAW'].includes(byId('trade-type').value); byId('ticker').value = cash ? 'CASH' : ''; byId('ticker').readOnly = cash; byId('quantity').value = '0'; byId('quantity').readOnly = cash; byId('price').value = '0'; });
 byId('transaction-form').addEventListener('submit', async (event) => {
@@ -101,5 +167,5 @@ byId('transaction-form').addEventListener('submit', async (event) => {
 });
 byId('transactions-body').addEventListener('click', async (event) => { const id = event.target.dataset.delete; if (!id || !confirm('이 거래 기록을 삭제할까요?')) return; const { error } = await supabase.from('transactions').delete().eq('id', id); if (error) notice(`삭제하지 못했습니다: ${error.message}`, true); else { notice('거래 기록을 삭제했습니다.'); await loadData(); } });
 
-supabase.auth.onAuthStateChange((_event, session) => { setAuthenticated(Boolean(session)); if (session) loadData(); });
-const { data: { session } } = await supabase.auth.getSession(); setAuthenticated(Boolean(session)); if (session) loadData();
+supabase.auth.onAuthStateChange((_event, session) => { currentUser = session?.user || null; setAuthenticated(Boolean(session)); if (session) loadData(); });
+const { data: { session } } = await supabase.auth.getSession(); currentUser = session?.user || null; setAuthenticated(Boolean(session)); if (session) loadData();
