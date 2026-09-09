@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#08111f" />
+    <title>개인 포트폴리오</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div>
+          <p class="eyebrow">PRIVATE INVESTMENT JOURNAL</p>
+          <h1>내 포트폴리오</h1>
+          <p class="subtle">거래 기록과 보유 현황을 어디서나 확인하세요.</p>
+        </div>
+        <button id="sign-out" class="ghost hidden">로그아웃</button>
+      </header>
+
+      <section id="auth-card" class="card auth-card">
+        <h2>안전하게 시작하기</h2>
+        <p class="subtle">본인 이메일로 로그인해 개인 데이터에만 접근합니다.</p>
+        <form id="auth-form">
+          <label>이메일<input id="email" type="email" autocomplete="email" required /></label>
+          <label>비밀번호<input id="password" type="password" autocomplete="current-password" minlength="8" required /></label>
+          <div class="actions"><button type="submit">로그인</button><button type="button" id="sign-up" class="ghost">계정 만들기</button></div>
+          <p id="auth-message" class="message" role="status"></p>
+        </form>
+      </section>
+
+      <section id="dashboard" class="hidden">
+        <div id="notice" class="message" role="status"></div>
+        <section class="metrics">
+          <article class="metric"><span>순투입금</span><strong id="net-invested">₩0</strong></article>
+          <article class="metric"><span>매수 원금</span><strong id="cost-basis">₩0</strong></article>
+          <article class="metric"><span>보유 종목</span><strong id="holding-count">0</strong></article>
+        </section>
+
+        <div class="grid">
+          <section class="card">
+            <h2>거래 기록</h2>
+            <form id="transaction-form" class="transaction-form">
+              <label>일시<input id="traded-at" type="datetime-local" required /></label>
+              <label>구분<select id="trade-type"><option value="BUY">매수</option><option value="SELL">매도</option><option value="DEPOSIT">입금</option><option value="WITHDRAW">출금</option></select></label>
+              <label>티커<input id="ticker" maxlength="15" placeholder="예: QQQ" required /></label>
+              <label>수량<input id="quantity" type="number" min="0" step="0.000001" value="0" required /></label>
+              <label>단가<input id="price" type="number" min="0" step="0.01" value="0" required /></label>
+              <label>수수료<input id="fee" type="number" min="0" step="0.01" value="0" required /></label>
+              <label class="wide">메모<input id="memo" maxlength="500" placeholder="선택 사항" /></label>
+              <button class="wide" type="submit">거래 저장</button>
+            </form>
+          </section>
+
+          <section class="card">
+            <h2>보유 현황</h2>
+            <div class="table-wrap"><table><thead><tr><th>티커</th><th>수량</th><th>평균 매입가</th><th>원금</th></tr></thead><tbody id="holdings-body"></tbody></table></div>
+          </section>
+        </div>
+
+        <section class="card">
+          <div class="section-heading"><h2>최근 거래</h2><button id="refresh" class="ghost">새로고침</button></div>
+          <div class="table-wrap"><table><thead><tr><th>일시</th><th>구분</th><th>티커</th><th>수량</th><th>금액</th><th>수수료</th><th></th></tr></thead><tbody id="transactions-body"></tbody></table></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
