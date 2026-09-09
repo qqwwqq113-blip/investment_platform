@@ -3,6 +3,6 @@
   "title": "개인 포트폴리오 대시보드",
   "access_mode": "custom",
   "static": {
-    "directory": "."
+    "directory": "dist"
   }
 }
