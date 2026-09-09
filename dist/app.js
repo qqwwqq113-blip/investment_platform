@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const supabaseUrl = 'https://spzrzptymyulmxhmjbvk.supabase.co';
 const supabaseKey = 'sb_publishable_erhED6hEL6zVgD70qz_Q5A_Q1k6E9QR';
 const supabase = createClient(supabaseUrl, supabaseKey);
-const won = new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 });
+const won = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
 
 const byId = (id) => document.getElementById(id);
