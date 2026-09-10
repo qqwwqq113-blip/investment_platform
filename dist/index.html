@@ -9,74 +9,21 @@
   </head>
   <body>
     <main class="shell">
-      <header>
-        <div>
-          <p class="eyebrow">PRIVATE INVESTMENT JOURNAL</p>
-          <h1>내 포트폴리오</h1>
-          <p class="subtle">거래 기록과 보유 현황을 어디서나 확인하세요.</p>
-        </div>
-        <button id="sign-out" class="ghost hidden">로그아웃</button>
-      </header>
-
-      <section id="auth-card" class="card auth-card">
-        <h2>안전하게 시작하기</h2>
-        <p class="subtle">본인 이메일로 로그인해 개인 데이터에만 접근합니다.</p>
-        <form id="auth-form">
-          <label>이메일<input id="email" type="email" autocomplete="email" required /></label>
-          <label>비밀번호<input id="password" type="password" autocomplete="current-password" minlength="8" required /></label>
-          <div class="actions"><button type="submit">로그인</button></div>
-          <p id="auth-message" class="message" role="status"></p>
-        </form>
-      </section>
-
+      <header class="app-header"><div><p class="eyebrow">PRIVATE INVESTMENT JOURNAL</p><h1>내 포트폴리오</h1><p id="as-of" class="subtle">나의 투자 현황을 한눈에 확인하세요.</p></div><button id="sign-out" class="ghost hidden">로그아웃</button></header>
+      <section id="auth-card" class="card auth-card"><h2>안전하게 시작하기</h2><p class="subtle">본인 이메일로 로그인해 개인 데이터에만 접근합니다.</p><form id="auth-form"><label>이메일<input id="email" type="email" autocomplete="email" required /></label><label>비밀번호<input id="password" type="password" autocomplete="current-password" minlength="8" required /></label><button type="submit">로그인</button><p id="auth-message" class="message" role="status"></p></form></section>
       <section id="dashboard" class="hidden">
         <div id="notice" class="message" role="status"></div>
-        <section class="metrics">
-          <article class="metric"><span>순투입금</span><strong id="net-invested">₩0</strong></article>
-          <article class="metric"><span>매수 원금</span><strong id="cost-basis">₩0</strong></article>
-          <article class="metric"><span>보유 종목</span><strong id="holding-count">0</strong></article>
+        <nav class="nav" aria-label="대시보드 탐색"><button class="nav-item active" data-page="home">⌂<span>대시보드</span></button><button class="nav-item" data-page="portfolio">◉<span>포트폴리오</span></button><button class="nav-item" data-page="transactions">↕<span>거래</span></button><button class="nav-item" data-page="settings">⚙<span>설정</span></button></nav>
+        <section id="page-home" class="page active">
+          <section class="hero card"><p class="eyebrow">PORTFOLIO STATUS</p><div class="hero-main"><div><span class="metric-label">최근 평가자산</span><strong id="total-equity">$0</strong></div><div id="status-summary" class="status-summary">스냅샷을 불러오는 중입니다.</div></div><div class="metrics"><article class="metric"><span>스냅샷 평가손익</span><strong id="total-profit">$0</strong></article><article class="metric"><span>스냅샷 수익률</span><strong id="total-return">0.0%</strong></article><article class="metric"><span>현금 비중</span><strong id="cash-weight">0.0%</strong></article></div></section>
+          <section class="card history-card"><div class="section-heading"><div><h2>포트폴리오 성과</h2><p id="history-summary" class="subtle">평가자산과 누적 투자원금을 비교합니다.</p></div><div class="range-buttons" role="group" aria-label="성과 기간"><button data-range="30">1M</button><button data-range="90">3M</button><button data-range="180">6M</button><button data-range="YTD">YTD</button><button data-range="365">1Y</button><button class="active" data-range="ALL">ALL</button></div></div><div id="history-chart" class="history-chart" role="img" aria-label="평가자산과 투자원금 추이 차트"></div><div class="chart-legend"><span><i class="equity-dot"></i>평가자산</span><span><i class="cost-dot"></i>누적 투자원금</span></div></section>
+          <section class="card allocation-card"><div class="section-heading"><div><h2>자산 배분</h2><p class="subtle">현재 비중 → 목표와 차이 → 필요한 다음 행동</p></div><span id="allocation-status" class="status-pill">계산 중</span></div><div class="allocation-grid"><div class="donut-panel"><h3>현재 자산 비중</h3><div id="current-donut" class="donut-wrap"></div></div><div class="donut-panel"><h3>목표 자산 비중</h3><div id="target-donut" class="donut-wrap"></div></div></div><div class="table-wrap allocation-table"><table><thead><tr><th>자산</th><th>현재</th><th>목표</th><th>괴리</th><th>권장 행동</th></tr></thead><tbody id="allocation-body"></tbody></table></div><button class="inline-action" data-page-link="settings">목표 비중 수정</button></section>
+          <section class="card compact-card"><div class="section-heading"><div><h2>보유 자산</h2><p class="subtle">매입원금 기준</p></div><button class="ghost" data-page-link="portfolio">전체 보기</button></div><div id="holding-preview" class="holding-preview"></div></section>
+          <section class="card compact-card"><div class="section-heading"><h2>최근 거래</h2><button class="ghost" data-page-link="transactions">전체 거래 보기</button></div><div id="recent-transactions" class="recent-transactions"></div></section>
         </section>
-
-        <section class="card allocation-card">
-          <div class="section-heading"><div><h2>자산 비중과 리밸런싱</h2><p class="subtle">현재 비중은 입력된 거래의 매입 원금·현금 잔액 기준입니다.</p></div><span id="allocation-status" class="status-pill">계산 중</span></div>
-          <div class="allocation-grid">
-            <div class="donut-panel"><h3>현재 자산 비중</h3><div id="current-donut" class="donut-wrap"></div></div>
-            <div class="donut-panel"><h3>목표 자산 비중</h3><div id="target-donut" class="donut-wrap"></div></div>
-            <div class="target-panel"><h3>목표 비중 설정</h3><form id="target-form" class="target-form"><label>QQQ (%)<input id="target-qqq" type="number" min="0" max="100" step="1" required /></label><label>QLD (%)<input id="target-qld" type="number" min="0" max="100" step="1" required /></label><label>SGOV (%)<input id="target-sgov" type="number" min="0" max="100" step="1" required /></label><button type="submit">목표 비중 저장</button><p id="target-message" class="message" role="status"></p></form></div>
-          </div>
-          <div class="table-wrap allocation-table"><table><thead><tr><th>자산</th><th>현재 비중</th><th>목표 비중</th><th>괴리도</th><th>점검</th></tr></thead><tbody id="allocation-body"></tbody></table></div>
-        </section>
-
-        <section class="card history-card">
-          <div class="section-heading"><div><h2>자산 추이</h2><p id="history-summary" class="subtle">저장된 일별 스냅샷을 불러오는 중입니다.</p></div><span id="history-range" class="chart-range"></span></div>
-          <div id="history-chart" class="history-chart" role="img" aria-label="일별 총자산 추이 차트"></div>
-        </section>
-
-        <div class="grid">
-          <section class="card">
-            <h2>거래 기록</h2>
-            <form id="transaction-form" class="transaction-form">
-              <label>일시<input id="traded-at" type="datetime-local" required /></label>
-              <label>구분<select id="trade-type"><option value="BUY">매수</option><option value="SELL">매도</option><option value="DEPOSIT">입금</option><option value="WITHDRAW">출금</option></select></label>
-              <label>티커<input id="ticker" maxlength="15" placeholder="예: QQQ" required /></label>
-              <label>수량<input id="quantity" type="number" min="0" step="0.000001" value="0" required /></label>
-              <label>단가<input id="price" type="number" min="0" step="0.01" value="0" required /></label>
-              <label>수수료<input id="fee" type="number" min="0" step="0.01" value="0" required /></label>
-              <label class="wide">메모<input id="memo" maxlength="500" placeholder="선택 사항" /></label>
-              <button class="wide" type="submit">거래 저장</button>
-            </form>
-          </section>
-
-          <section class="card">
-            <h2>보유 현황</h2>
-            <div class="table-wrap"><table><thead><tr><th>티커</th><th>수량</th><th>평균 매입가</th><th>원금</th></tr></thead><tbody id="holdings-body"></tbody></table></div>
-          </section>
-        </div>
-
-        <section class="card">
-          <div class="section-heading"><h2>최근 거래</h2><button id="refresh" class="ghost">새로고침</button></div>
-          <div class="table-wrap"><table><thead><tr><th>일시</th><th>구분</th><th>티커</th><th>수량</th><th>금액</th><th>수수료</th><th></th></tr></thead><tbody id="transactions-body"></tbody></table></div>
-        </section>
+        <section id="page-portfolio" class="page"><section class="card"><div class="section-heading"><div><h2>보유 자산</h2><p class="subtle">수량·평균 매입가·원금·포트폴리오 비중</p></div><span class="status-pill neutral">매입원금 기준</span></div><div id="holdings-cards" class="holdings-cards"></div></section></section>
+        <section id="page-transactions" class="page"><section class="card"><div class="section-heading"><div><h2>거래 추가</h2><p class="subtle">거래 유형에 필요한 항목만 입력하세요.</p></div></div><form id="transaction-form" class="transaction-form"><input id="trade-type" type="hidden" value="BUY" /><div class="trade-types" role="group" aria-label="거래 유형"><button type="button" class="trade-type active" data-type="BUY">매수</button><button type="button" class="trade-type" data-type="SELL">매도</button><button type="button" class="trade-type" data-type="DEPOSIT">입금</button><button type="button" class="trade-type" data-type="WITHDRAW">출금</button></div><label>일시<input id="traded-at" type="datetime-local" required /></label><label class="stock-field">티커<input id="ticker" maxlength="15" placeholder="예: QQQ" required /></label><label class="stock-field">수량<input id="quantity" type="number" min="0" step="0.000001" value="0" required /></label><label><span id="price-label">단가</span><input id="price" type="number" min="0" step="0.01" value="0" required /></label><label class="stock-field">수수료<input id="fee" type="number" min="0" step="0.01" value="0" required /></label><label class="wide">메모<input id="memo" maxlength="500" placeholder="선택 사항" /></label><button class="wide" type="submit">거래 저장</button></form></section><section class="card"><div class="section-heading"><h2>전체 거래 내역</h2><button id="refresh" class="ghost">새로고침</button></div><div class="table-wrap"><table><thead><tr><th>일시</th><th>구분</th><th>티커</th><th>수량</th><th>금액</th><th>수수료</th><th></th></tr></thead><tbody id="transactions-body"></tbody></table></div></section></section>
+        <section id="page-settings" class="page"><section class="card settings-card"><h2>목표 자산 비중</h2><p class="subtle">목표 비중은 자주 바뀌지 않는 설정입니다. 합계가 100%일 때만 저장됩니다.</p><form id="target-form" class="target-form"><label>QQQ (%)<input id="target-qqq" type="number" min="0" max="100" step="1" required /></label><label>QLD (%)<input id="target-qld" type="number" min="0" max="100" step="1" required /></label><label>SGOV (%)<input id="target-sgov" type="number" min="0" max="100" step="1" required /></label><button type="submit">목표 비중 저장</button><p id="target-message" class="message" role="status"></p></form></section></section>
       </section>
     </main>
     <script type="module" src="app.js"></script>
