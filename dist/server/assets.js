@@ -7,6 +7,5 @@ const files = {
 };
 export function staticAsset(pathname) {
   const file = files[pathname];
-  return file ? new Response(decode(file[0]), { headers: { "content-type": file[1], "cache-control": "public, max-age=300" } }) : null;
+  return file ? new Response(decode(file[0]), { headers: { "content-type": file[1], "cache-control": "no-store" } }) : null;
 }
-
