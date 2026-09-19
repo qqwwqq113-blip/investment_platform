@@ -1,26 +1,24 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const portfolioUserId = "d5c24678-1079-48da-91f1-d7be47b9f975";
 const responseHeaders = { "content-type": "application/json; charset=utf-8" };
+const asNumber = (value: unknown) => Number(value) || 0;
+const kstDate = (value: string | Date = new Date()) => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+}).format(new Date(value));
 
-const kstDate = () => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
-};
+type Transaction = { traded_at: string; ticker: string; trade_type: string; quantity: number; price: number; amount: number; fee: number };
+type Holding = { ticker: string; quantity: number; cost: number };
 
-function portfolioState(rows: any[]) {
-  const holdings = new Map<string, { ticker: string; quantity: number; cost: number }>();
-  let cash = 0;
-  for (const row of [...rows].sort((a, b) => String(a.traded_at).localeCompare(String(b.traded_at)))) {
-    const amount = Number(row.amount) || 0;
-    const fee = Number(row.fee) || 0;
-    const quantity = Number(row.quantity) || 0;
-    if (row.trade_type === "DEPOSIT") cash += amount;
-    else if (row.trade_type === "WITHDRAW") cash -= amount;
+function portfolioState(rows: Transaction[], throughDate?: string) {
+  const holdings = new Map<string, Holding>();
+  let cash = 0, deposits = 0, withdrawals = 0;
+  const ordered = [...rows].sort((a, b) => String(a.traded_at).localeCompare(String(b.traded_at)));
+  for (const row of ordered) {
+    if (throughDate && kstDate(row.traded_at) > throughDate) continue;
+    const amount = asNumber(row.amount), fee = asNumber(row.fee), quantity = asNumber(row.quantity);
+    if (row.trade_type === "DEPOSIT") { cash += amount; deposits += amount; }
+    else if (row.trade_type === "WITHDRAW") { cash -= amount; withdrawals += amount; }
     else if (row.trade_type === "BUY") {
       cash -= amount + fee;
       const holding = holdings.get(row.ticker) || { ticker: row.ticker, quantity: 0, cost: 0 };
@@ -37,47 +35,125 @@ function portfolioState(rows: any[]) {
       holdings.set(row.ticker, holding);
     }
   }
-  return { cash, holdings: [...holdings.values()].filter((holding) => holding.quantity > 1e-7) };
+  return { cash, netContributions: deposits - withdrawals, holdings: [...holdings.values()].filter(item => item.quantity > 1e-7) };
 }
 
-Deno.serve(async (request) => {
-  if (request.method !== "POST") return new Response(JSON.stringify({ error: "POST 요청만 허용됩니다." }), { status: 405, headers: responseHeaders });
-  const url = Deno.env.get("SUPABASE_URL")!;
-  const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const supabase = createClient(url, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data: transactions, error: transactionError } = await supabase
-    .from("transactions").select("traded_at,ticker,trade_type,quantity,price,amount,fee")
-    .eq("user_id", portfolioUserId).order("traded_at", { ascending: true });
-  if (transactionError) return new Response(JSON.stringify({ error: "거래 내역을 읽지 못했습니다." }), { status: 502, headers: responseHeaders });
-
-  const { cash, holdings } = portfolioState(transactions || []);
-  const tickers = holdings.map((holding) => holding.ticker);
-  const quoteResponse = tickers.length ? await fetch(`${url}/functions/v1/market-quotes`, {
+async function currentPrices(url: string, serviceRole: string, holdings: Holding[]) {
+  const tickers = holdings.map(item => item.ticker);
+  if (!tickers.length) return new Map<string, number>();
+  const response = await fetch(`${url}/functions/v1/market-quotes`, {
     method: "POST",
     headers: { apikey: serviceRole, Authorization: `Bearer ${serviceRole}`, "content-type": "application/json" },
     body: JSON.stringify({ tickers }),
-  }) : null;
-  const quotePayload = quoteResponse?.ok ? await quoteResponse.json() : { quotes: [] };
-  const prices = new Map((Array.isArray(quotePayload.quotes) ? quotePayload.quotes : [])
+  });
+  const payload = response.ok ? await response.json() : { quotes: [] };
+  return new Map((Array.isArray(payload.quotes) ? payload.quotes : [])
     .filter((quote: any) => Number.isFinite(Number(quote.price)))
-    .map((quote: any) => [quote.ticker, Number(quote.price)]));
-  const snapshotHoldings = holdings.map((holding) => ({
-    ticker: holding.ticker,
-    quantity: holding.quantity,
-    price: prices.get(holding.ticker) ?? holding.cost / holding.quantity,
-  }));
-  const totalEquity = Math.max(0, cash) + snapshotHoldings.reduce((sum, holding) => sum + holding.quantity * holding.price, 0);
-  const totalCost = Math.max(0, cash) + holdings.reduce((sum, holding) => sum + holding.cost, 0);
+    .map((quote: any) => [String(quote.ticker), Number(quote.price)]));
+}
+
+async function priceHistory(ticker: string, from: string) {
+  const period1 = Math.floor(new Date(`${from}T00:00:00Z`).getTime() / 1000) - 86400 * 7;
+  const period2 = Math.floor(Date.now() / 1000) + 86400;
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1d&events=splits`, { headers: { "user-agent": "Mozilla/5.0 portfolio-dashboard" } });
+  if (!response.ok) return new Map<string, number>();
+  const result = (await response.json())?.chart?.result?.[0];
+  const timestamps = result?.timestamp || [], closes = result?.indicators?.quote?.[0]?.close || [];
+  return new Map(timestamps.map((timestamp: number, index: number) => [new Date(timestamp * 1000).toISOString().slice(0, 10), Number(closes[index])]).filter((entry: [string, number]) => Number.isFinite(entry[1])));
+}
+
+function priceOn(history: Map<string, number>, date: string) {
+  let latest: number | undefined;
+  for (const [priceDate, price] of history) { if (priceDate > date) break; latest = price; }
+  return latest;
+}
+
+function valuation(state: ReturnType<typeof portfolioState>, prices: Map<string, number>) {
+  const holdings = state.holdings.map(item => ({ ticker: item.ticker, quantity: item.quantity, price: prices.get(item.ticker) ?? item.cost / item.quantity }));
+  return { holdings, totalEquity: state.cash + holdings.reduce((sum, item) => sum + item.quantity * item.price, 0) };
+}
+
+Deno.serve(async request => {
+  if (request.method !== "POST") return new Response(JSON.stringify({ error: "POST 요청만 허용됩니다." }), { status: 405, headers: responseHeaders });
+  const url = Deno.env.get("SUPABASE_URL")!;
+  const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const portfolioUserId = Deno.env.get("PORTFOLIO_USER_ID");
+  if (!portfolioUserId) return new Response(JSON.stringify({ error: "운영 사용자 환경 변수가 없습니다." }), { status: 500, headers: responseHeaders });
+  const supabase = createClient(url, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
+  let input: any = {};
+  try { input = await request.json(); } catch {}
+
+  const { data: transactions, error: transactionError } = await supabase.from("transactions")
+    .select("traded_at,ticker,trade_type,quantity,price,amount,fee")
+    .eq("user_id", portfolioUserId).order("traded_at", { ascending: true });
+  if (transactionError) return new Response(JSON.stringify({ error: "거래 내역을 읽지 못했습니다." }), { status: 502, headers: responseHeaders });
+  const rows = (transactions || []) as Transaction[];
+
+  if (input.action === "cash-flow-boundary") {
+    const state = portfolioState(rows);
+    const prices = await currentPrices(url, serviceRole, state.holdings);
+    const value = valuation(state, prices);
+    const { error } = await supabase.from("valuation_events").insert({
+      user_id: portfolioUserId,
+      occurred_at: input.occurredAt || new Date().toISOString(),
+      equity_before_flow: value.totalEquity,
+      cash_flow: asNumber(input.cashFlow),
+      source: "transaction",
+    });
+    if (error) return new Response(JSON.stringify({ error: "현금흐름 경계값을 저장하지 못했습니다." }), { status: 502, headers: responseHeaders });
+    return new Response(JSON.stringify({ ok: true, boundarySaved: true }), { headers: responseHeaders });
+  }
+
+  if (input.action === "rebuild") {
+    const fromDate = kstDate(input.from || rows[0]?.traded_at || new Date());
+    const { data: existing } = await supabase.from("daily_snapshots").select("snapshot_date")
+      .eq("user_id", portfolioUserId).gte("snapshot_date", fromDate).order("snapshot_date", { ascending: true });
+    const dates = [...new Set([...(existing || []).map(item => item.snapshot_date), kstDate()])].sort();
+    const tickers = [...new Set(rows.filter(row => ["BUY", "SELL"].includes(row.trade_type)).map(row => row.ticker))];
+    const histories = new Map<string, Map<string, number>>();
+    await Promise.all(tickers.map(async ticker => histories.set(ticker, await priceHistory(ticker, fromDate))));
+    const rebuilt = dates.map(date => {
+      const state = portfolioState(rows, date);
+      const prices = new Map(state.holdings.map(item => [item.ticker, priceOn(histories.get(item.ticker) || new Map(), date) ?? item.cost / item.quantity]));
+      const value = valuation(state, prices);
+      return {
+        user_id: portfolioUserId, snapshot_date: date, total_equity: value.totalEquity,
+        total_cost: state.netContributions, net_contributions: state.netContributions,
+        cash_balance: state.cash, holdings: value.holdings, twr_daily_return: null,
+        twr_coverage_start: date === kstDate() ? date : null, updated_at: new Date().toISOString(),
+      };
+    });
+    const { error } = await supabase.from("daily_snapshots").upsert(rebuilt, { onConflict: "user_id,snapshot_date" });
+    if (error) return new Response(JSON.stringify({ error: "과거 평가 이력을 재구성하지 못했습니다." }), { status: 502, headers: responseHeaders });
+    return new Response(JSON.stringify({ ok: true, rebuilt: rebuilt.length, fromDate }), { headers: responseHeaders });
+  }
+
+  const state = portfolioState(rows);
+  const prices = await currentPrices(url, serviceRole, state.holdings);
+  const value = valuation(state, prices);
   const snapshotDate = kstDate();
   const { data: previous } = await supabase.from("daily_snapshots")
-    .select("total_equity,total_cost").eq("user_id", portfolioUserId)
+    .select("total_equity,snapshot_date,twr_coverage_start,updated_at").eq("user_id", portfolioUserId)
     .lt("snapshot_date", snapshotDate).order("snapshot_date", { ascending: false }).limit(1).maybeSingle();
-  const netCashFlow = totalCost - Number(previous?.total_cost || 0);
-  const dailyReturn = previous?.total_equity ? (totalEquity - netCashFlow - Number(previous.total_equity)) / Number(previous.total_equity) : 0;
+  let twrDailyReturn: number | null = null;
+  let coverageStart = previous?.twr_coverage_start || snapshotDate;
+  if (previous?.total_equity) {
+    const { data: events } = await supabase.from("valuation_events").select("occurred_at,equity_before_flow,cash_flow")
+      .eq("user_id", portfolioUserId).gt("occurred_at", previous.updated_at).lte("occurred_at", new Date().toISOString()).order("occurred_at", { ascending: true });
+    let factor = 1, base = asNumber(previous.total_equity), exact = true;
+    for (const event of events || []) {
+      if (base <= 0 || asNumber(event.equity_before_flow) <= 0) { exact = false; break; }
+      factor *= asNumber(event.equity_before_flow) / base;
+      base = asNumber(event.equity_before_flow) + asNumber(event.cash_flow);
+    }
+    if (exact && base > 0) twrDailyReturn = factor * (value.totalEquity / base) - 1;
+  }
   const { error: saveError } = await supabase.from("daily_snapshots").upsert({
-    user_id: portfolioUserId, snapshot_date: snapshotDate, total_equity: totalEquity, total_cost: totalCost,
-    cash_balance: cash, holdings: snapshotHoldings, daily_return: dailyReturn, updated_at: new Date().toISOString(),
+    user_id: portfolioUserId, snapshot_date: snapshotDate, total_equity: value.totalEquity,
+    total_cost: state.netContributions, net_contributions: state.netContributions,
+    cash_balance: state.cash, holdings: value.holdings, twr_daily_return: twrDailyReturn,
+    twr_coverage_start: coverageStart, updated_at: new Date().toISOString(),
   }, { onConflict: "user_id,snapshot_date" });
   if (saveError) return new Response(JSON.stringify({ error: "평가 스냅샷을 저장하지 못했습니다." }), { status: 502, headers: responseHeaders });
-  return new Response(JSON.stringify({ ok: true, snapshotDate, totalEquity, quoteCount: prices.size }), { headers: responseHeaders });
+  return new Response(JSON.stringify({ ok: true, snapshotDate, totalEquity: value.totalEquity, quoteCount: prices.size, twrExact: twrDailyReturn !== null }), { headers: responseHeaders });
 });
