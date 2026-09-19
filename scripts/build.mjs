@@ -8,6 +8,8 @@ await mkdir(server, { recursive: true });
 
 const publicFiles = ['index.html', 'app.js', 'finance.js', 'styles.css'];
 for (const file of publicFiles) await copyFile(resolve(root, file), resolve(dist, file));
+await mkdir(resolve(dist, '.openai'), { recursive: true });
+await copyFile(resolve(root, '.openai/hosting.json'), resolve(dist, '.openai/hosting.json'));
 
 const mime = { 'index.html': 'text/html; charset=utf-8', 'app.js': 'application/javascript; charset=utf-8', 'finance.js': 'application/javascript; charset=utf-8', 'styles.css': 'text/css; charset=utf-8' };
 const assets = {};
