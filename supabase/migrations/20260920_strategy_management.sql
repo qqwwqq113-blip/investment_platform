@@ -16,6 +16,7 @@ create table if not exists public.portfolio_strategy_settings (
 
 alter table public.portfolio_strategy_settings enable row level security;
 revoke all on table public.portfolio_strategy_settings from anon, authenticated;
+grant select, insert, update on table public.portfolio_strategy_settings to service_role;
 
 alter table public.transactions
   add column if not exists reason text,
@@ -39,5 +40,6 @@ create index if not exists transactions_strategy_cycle_idx
   on public.transactions (user_id, strategy_cycle_id, strategy_trigger)
   where strategy_cycle_id is not null;
 
-commit;
+notify pgrst, 'reload schema';
 
+commit;
