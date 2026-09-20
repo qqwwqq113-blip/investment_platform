@@ -1,8 +1,51 @@
 export const TARGET_DEFAULTS = Object.freeze({ QQQ: 10, QLD: 70, SGOV: 20 });
 export const INVESTMENT_TICKERS = Object.freeze(['QQQ', 'QLD', 'SGOV']);
+export const STRATEGY_DEFAULTS = Object.freeze({
+  targetQQQ: 10,
+  targetQLD: 70,
+  targetSGOV: 20,
+  qqqTrigger1: -20,
+  qqqTrigger1SgovPct: 50,
+  qqqTrigger2: -30,
+  qqqTrigger2RemainingPct: 100,
+  qldRebalanceTrigger: 85,
+});
+export const TRANSACTION_REASONS = Object.freeze([
+  'REGULAR_BUY', 'QQQ_DRAWDOWN_1', 'QQQ_DRAWDOWN_2', 'QLD_REBALANCE', 'NEW_CAPITAL', 'OTHER',
+]);
 
 const n = value => Number(value) || 0;
 const ascending = rows => [...rows].sort((a, b) => String(a.traded_at).localeCompare(String(b.traded_at)));
+
+export function normalizeStrategy(input = {}) {
+  const source = input || {};
+  return Object.fromEntries(Object.entries(STRATEGY_DEFAULTS).map(([key, fallback]) => {
+    const value = Number(source[key]);
+    return [key, Number.isFinite(value) ? value : fallback];
+  }));
+}
+
+export function strategyTargets(settings) {
+  const value = normalizeStrategy(settings);
+  return { QQQ: value.targetQQQ, QLD: value.targetQLD, SGOV: value.targetSGOV };
+}
+
+export function strategyFromLegacyTargets(saved) {
+  if (!saved || typeof saved !== 'object') return { ...STRATEGY_DEFAULTS };
+  const candidate = normalizeStrategy({ targetQQQ: saved.QQQ, targetQLD: saved.QLD, targetSGOV: saved.SGOV });
+  return validateStrategy(candidate) ? { ...STRATEGY_DEFAULTS } : candidate;
+}
+
+export function validateStrategy(input) {
+  const value = normalizeStrategy(input);
+  const targetTotal = value.targetQQQ + value.targetQLD + value.targetSGOV;
+  if ([value.targetQQQ, value.targetQLD, value.targetSGOV].some(item => item < 0 || item > 100)) return '목표 비중은 0~100% 범위여야 합니다.';
+  if (Math.abs(targetTotal - 100) > 1e-7) return `목표 비중 합계는 100%여야 합니다. 현재 ${targetTotal.toFixed(1)}%입니다.`;
+  if (value.qqqTrigger1 >= 0 || value.qqqTrigger1 < -100 || value.qqqTrigger2 >= 0 || value.qqqTrigger2 < -100) return 'QQQ Trigger는 -100%보다 크고 0%보다 작은 값이어야 합니다.';
+  if (value.qqqTrigger2 >= value.qqqTrigger1) return '2차 QQQ Trigger는 1차보다 더 깊어야 합니다.';
+  if ([value.qqqTrigger1SgovPct, value.qqqTrigger2RemainingPct, value.qldRebalanceTrigger].some(item => item < 0 || item > 100)) return '사용 비율과 QLD Trigger는 0~100% 범위여야 합니다.';
+  return null;
+}
 
 export function portfolioState(rows) {
   const holdings = new Map();
@@ -144,7 +187,10 @@ export function maximumDrawdownFromReturns(snapshots) {
   return { available: true, value: maximumDrawdown };
 }
 
-export function qqqDrawdown(prices) {
+export function qqqDrawdown(prices, settings = STRATEGY_DEFAULTS) {
+  const strategy = normalizeStrategy(settings);
+  const trigger1 = strategy.qqqTrigger1 / 100;
+  const trigger2 = strategy.qqqTrigger2 / 100;
   const points = prices
     .map(point => ({ date: String(point.date), close: Number(point.close) }))
     .filter(point => point.date && Number.isFinite(point.close) && point.close > 0)
@@ -165,8 +211,8 @@ export function qqqDrawdown(prices) {
   for (const point of cycle) {
     const drawdown = point.close / peak - 1;
     minimum = Math.min(minimum, drawdown);
-    if (!first20 && drawdown <= -0.2 + 1e-10) first20 = point.date;
-    if (!first30 && drawdown <= -0.3 + 1e-10) first30 = point.date;
+    if (!first20 && drawdown <= trigger1 + 1e-10) first20 = point.date;
+    if (!first30 && drawdown <= trigger2 + 1e-10) first30 = point.date;
   }
   const latest = points.at(-1);
   return {
@@ -179,33 +225,41 @@ export function qqqDrawdown(prices) {
     first30,
     latestPrice: latest.close,
     latestDate: latest.date,
+    cycleId: `QQQ:${points[peakIndex].date}`,
   };
 }
 
-export function strategyAdvice({ drawdown, allocation }) {
+export function strategyAdvice({ drawdown, allocation, settings = STRATEGY_DEFAULTS, qldCycleId = null }) {
+  const strategy = normalizeStrategy(settings);
   const qld = allocation.rows.find(row => row.ticker === 'QLD');
-  if (qld && qld.currentWeight >= 85) {
+  if (qld && qld.currentWeight >= strategy.qldRebalanceTrigger) {
     return {
       kind: 'RESET_TARGET',
       title: '목표 포트폴리오 복귀 조건 충족',
-      detail: 'QQQ 10% · QLD 70% · SGOV 20%로 조정할 시점입니다.',
+      detail: `QQQ ${strategy.targetQQQ}% · QLD ${strategy.targetQLD}% · SGOV ${strategy.targetSGOV}%로 조정할 시점입니다.`,
       moves: allocation.rows.map(row => ({ ticker: row.ticker, amount: row.difference })),
+      trigger: 'QLD_85',
+      cycleId: qldCycleId,
     };
   }
   if (drawdown?.stage === 2) {
     return {
       kind: 'QQQ_30',
       title: '2차 리밸런싱 조건 충족',
-      detail: '남아 있는 SGOV를 QLD로 이동하는 전략 구간입니다.',
-      amount: Math.min(allocation.values.SGOV || 0, allocation.total * 0.1),
+      detail: `남은 SGOV의 ${strategy.qqqTrigger2RemainingPct}%를 QLD로 이동하는 전략 구간입니다.`,
+      amount: (allocation.values.SGOV || 0) * strategy.qqqTrigger2RemainingPct / 100,
+      trigger: 'QQQ_30',
+      cycleId: drawdown.cycleId,
     };
   }
   if (drawdown?.stage === 1) {
     return {
       kind: 'QQQ_20',
       title: '1차 리밸런싱 조건 충족',
-      detail: 'SGOV 목표자산의 절반을 QLD로 이동하는 전략 구간입니다.',
-      amount: Math.min(allocation.values.SGOV || 0, allocation.total * 0.1),
+      detail: `현재 SGOV의 ${strategy.qqqTrigger1SgovPct}%를 QLD로 이동하는 전략 구간입니다.`,
+      amount: (allocation.values.SGOV || 0) * strategy.qqqTrigger1SgovPct / 100,
+      trigger: 'QQQ_20',
+      cycleId: drawdown.cycleId,
     };
   }
   const contribution = nextContributionAdvice(allocation);
@@ -217,6 +271,73 @@ export function strategyAdvice({ drawdown, allocation }) {
       : '현재 투자자산 비중이 목표에 가깝습니다.',
     contribution,
   };
+}
+
+export function strategyExecutionStatus(advice, rows) {
+  if (!advice || !['QQQ_20', 'QQQ_30', 'RESET_TARGET'].includes(advice.kind)) return { required: false, executed: false, matches: [] };
+  const reason = advice.kind === 'QQQ_20' ? 'QQQ_DRAWDOWN_1' : advice.kind === 'QQQ_30' ? 'QQQ_DRAWDOWN_2' : 'QLD_REBALANCE';
+  const matches = rows.filter(row => row.reason === reason && ['BUY', 'SELL'].includes(row.trade_type)
+    && row.strategy_cycle_id === advice.cycleId);
+  return { required: true, executed: matches.length > 0, matches };
+}
+
+export function nominalNasdaqExposure(allocation) {
+  if (!allocation.total) return 0;
+  const qqq = allocation.rows.find(row => row.ticker === 'QQQ')?.currentWeight || 0;
+  const qld = allocation.rows.find(row => row.ticker === 'QLD')?.currentWeight || 0;
+  return (qqq + qld * 2) / 100;
+}
+
+export function sgovCapacity(allocation, settings = STRATEGY_DEFAULTS) {
+  const strategy = normalizeStrategy(settings);
+  const current = allocation.values.SGOV || 0;
+  const first = current * strategy.qqqTrigger1SgovPct / 100;
+  return {
+    current,
+    first,
+    second: Math.max(0, current - first) * strategy.qqqTrigger2RemainingPct / 100,
+  };
+}
+
+export function currentQldCycleId(snapshots, currentWeight, threshold, currentDate) {
+  if (currentWeight < threshold) return null;
+  let start = null;
+  for (const snapshot of [...snapshots].sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)))) {
+    const values = Object.fromEntries(INVESTMENT_TICKERS.map(ticker => [ticker, 0]));
+    for (const item of Array.isArray(snapshot.holdings) ? snapshot.holdings : []) {
+      if (item.ticker in values) values[item.ticker] += n(item.quantity) * n(item.price);
+    }
+    const total = Object.values(values).reduce((sum, value) => sum + value, 0);
+    const weight = total ? values.QLD / total * 100 : 0;
+    if (weight >= threshold && !start) start = snapshot.snapshot_date;
+    if (weight < threshold) start = null;
+  }
+  return `QLD:${start || currentDate}`;
+}
+
+export function benchmarkComparison(snapshots, benchmarkPoints) {
+  const returns = [...snapshots]
+    .filter(row => row.snapshot_date && Number.isFinite(Number(row.twr_daily_return)))
+    .sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+  let portfolioIndex = 1;
+  const portfolio = new Map();
+  for (const row of returns) {
+    portfolioIndex *= 1 + Number(row.twr_daily_return);
+    portfolio.set(String(row.snapshot_date), portfolioIndex);
+  }
+  const benchmark = new Map((benchmarkPoints || [])
+    .map(point => [String(point.date), Number(point.value)])
+    .filter(([, value]) => Number.isFinite(value) && value > 0));
+  const dates = [...portfolio.keys()].filter(date => benchmark.has(date)).sort();
+  if (!dates.length) return { available: false, points: [], startDate: null };
+  const firstPortfolio = portfolio.get(dates[0]);
+  const firstBenchmark = benchmark.get(dates[0]);
+  const points = dates.map(date => {
+    const portfolioValue = portfolio.get(date) / firstPortfolio * 100;
+    const benchmarkValue = benchmark.get(date) / firstBenchmark * 100;
+    return { date, portfolio: portfolioValue, benchmark: benchmarkValue, excess: portfolioValue / benchmarkValue - 1 };
+  });
+  return { available: true, points, startDate: dates[0] };
 }
 
 export function validateTransaction(input, currentState) {
@@ -233,5 +354,7 @@ export function validateTransaction(input, currentState) {
     const holding = currentState.holdings.find(item => item.ticker === input.ticker);
     if (!holding || quantity > holding.quantity + 1e-7) return '보유 수량보다 많이 매도할 수 없습니다.';
   }
+  if (input.reason && !TRANSACTION_REASONS.includes(input.reason)) return '거래 사유를 확인하세요.';
+  if (!['BUY', 'SELL'].includes(type) && input.reason) return '거래 사유는 매수·매도 거래에만 사용할 수 있습니다.';
   return null;
 }

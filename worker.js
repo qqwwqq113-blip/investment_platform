@@ -2,7 +2,9 @@ const enc = new TextEncoder();
 const b64 = value => btoa(String.fromCharCode(...new Uint8Array(value))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 const unb64 = value => Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4)), char => char.charCodeAt(0));
 const json = (value, status = 200, headers = {}) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
-let strategyCache = { expires: 0, value: null };
+const STRATEGY_DEFAULTS = Object.freeze({ targetQQQ: 10, targetQLD: 70, targetSGOV: 20, qqqTrigger1: -20, qqqTrigger1SgovPct: 50, qqqTrigger2: -30, qqqTrigger2RemainingPct: 100, qldRebalanceTrigger: 85 });
+const REASONS = new Set(['REGULAR_BUY', 'QQQ_DRAWDOWN_1', 'QQQ_DRAWDOWN_2', 'QLD_REBALANCE', 'NEW_CAPITAL', 'OTHER']);
+let marketCache = { expires: 0, value: null };
 
 async function sign(value, secret) { return b64(await crypto.subtle.sign('HMAC', await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']), enc.encode(value))); }
 async function session(env) { const payload = b64(enc.encode(JSON.stringify({ exp: Date.now() + 2592e6 }))); return `${payload}.${await sign(payload, env.SESSION_SECRET)}`; }
@@ -27,8 +29,37 @@ function valid(row) {
   if (!row || !['BUY', 'SELL', 'DEPOSIT', 'WITHDRAW'].includes(row.trade_type) || typeof row.ticker !== 'string' || typeof row.traded_at !== 'string') return false;
   if (row.ticker.length > 15 || String(row.memo || '').length > 500 || !/^([A-Z.]{1,15}|CASH)$/i.test(row.ticker)) return false;
   if (![row.quantity, row.price, row.amount, row.fee].every(value => Number.isFinite(Number(value)) && Number(value) >= 0)) return false;
+  if (row.reason && !REASONS.has(row.reason)) return false;
+  if (!['BUY', 'SELL'].includes(row.trade_type) && row.reason) return false;
   if (['BUY', 'SELL'].includes(row.trade_type)) return Number(row.quantity) > 0 && Number(row.price) > 0;
   return Number(row.amount) > 0 && row.ticker.toUpperCase() === 'CASH';
+}
+
+const settingsFromRow = row => row ? ({
+  targetQQQ: Number(row.target_qqq), targetQLD: Number(row.target_qld), targetSGOV: Number(row.target_sgov),
+  qqqTrigger1: Number(row.qqq_trigger_1), qqqTrigger1SgovPct: Number(row.qqq_trigger_1_sgov_pct),
+  qqqTrigger2: Number(row.qqq_trigger_2), qqqTrigger2RemainingPct: Number(row.qqq_trigger_2_remaining_pct),
+  qldRebalanceTrigger: Number(row.qld_rebalance_trigger),
+}) : null;
+const settingsToRow = value => ({
+  target_qqq: Number(value.targetQQQ), target_qld: Number(value.targetQLD), target_sgov: Number(value.targetSGOV),
+  qqq_trigger_1: Number(value.qqqTrigger1), qqq_trigger_1_sgov_pct: Number(value.qqqTrigger1SgovPct),
+  qqq_trigger_2: Number(value.qqqTrigger2), qqq_trigger_2_remaining_pct: Number(value.qqqTrigger2RemainingPct),
+  qld_rebalance_trigger: Number(value.qldRebalanceTrigger),
+});
+export function validSettings(input) {
+  if (!input || Object.keys(STRATEGY_DEFAULTS).some(key => !Number.isFinite(Number(input[key])))) return false;
+  const value = Object.fromEntries(Object.keys(STRATEGY_DEFAULTS).map(key => [key, Number(input[key])]));
+  return [value.targetQQQ, value.targetQLD, value.targetSGOV].every(item => item >= 0 && item <= 100)
+    && Math.abs(value.targetQQQ + value.targetQLD + value.targetSGOV - 100) < 1e-7
+    && value.qqqTrigger1 > -100 && value.qqqTrigger1 < 0
+    && value.qqqTrigger2 > -100 && value.qqqTrigger2 < value.qqqTrigger1
+    && [value.qqqTrigger1SgovPct, value.qqqTrigger2RemainingPct, value.qldRebalanceTrigger].every(item => item >= 0 && item <= 100);
+}
+async function strategySettings(env) {
+  const response = await db(env, `/rest/v1/portfolio_strategy_settings?select=*&user_id=eq.${env.PORTFOLIO_USER_ID}&limit=1`);
+  if (!response.ok) throw new Error('전략 설정을 읽지 못했습니다.');
+  return settingsFromRow((await response.json())[0]);
 }
 async function transactions(env) {
   const response = await db(env, `/rest/v1/transactions?select=*&user_id=eq.${env.PORTFOLIO_USER_ID}&order=traded_at.asc`);
@@ -43,27 +74,48 @@ async function validateAgainstLedger(env, input, excludedId) {
   if (!rows) return '보유 수량을 확인하지 못했습니다.';
   return Number(input.quantity) > quantityAvailable(rows, input.ticker.toUpperCase(), excludedId) + 1e-7 ? '보유 수량보다 많이 매도할 수 없습니다.' : null;
 }
-async function qqqStrategy() {
-  if (strategyCache.value && strategyCache.expires > Date.now()) return strategyCache.value;
-  const response = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/QQQ?range=max&interval=1d&events=splits', { headers: { 'user-agent': 'Mozilla/5.0 portfolio-dashboard' } });
+async function qqqMarketHistory() {
+  if (marketCache.value && marketCache.expires > Date.now()) return marketCache.value;
+  const response = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/QQQ?range=max&interval=1d&events=div%2Csplits', { headers: { 'user-agent': 'Mozilla/5.0 portfolio-dashboard' } });
   if (!response.ok) throw new Error('QQQ 가격 이력을 불러오지 못했습니다.');
   const result = (await response.json())?.chart?.result?.[0];
-  const timestamps = result?.timestamp || [], closes = result?.indicators?.quote?.[0]?.close || [];
-  const points = timestamps.map((timestamp, index) => ({ date: new Date(timestamp * 1000).toISOString().slice(0, 10), close: Number(closes[index]) })).filter(point => Number.isFinite(point.close) && point.close > 0);
+  const timestamps = result?.timestamp || [], closes = result?.indicators?.quote?.[0]?.close || [], adjusted = result?.indicators?.adjclose?.[0]?.adjclose || [];
+  const points = timestamps.map((timestamp, index) => ({ date: new Date(timestamp * 1000).toISOString().slice(0, 10), close: Number(closes[index]), adjusted: Number(adjusted[index]) }))
+    .filter(point => Number.isFinite(point.close) && point.close > 0);
   if (!points.length) throw new Error('QQQ 가격 이력이 없습니다.');
+  marketCache = { expires: Date.now() + 3600000, value: points };
+  return points;
+}
+async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
+  const points = await qqqMarketHistory();
   let peak = -Infinity, peakIndex = 0;
   points.forEach((point, index) => { if (point.close >= peak) { peak = point.close; peakIndex = index; } });
   let minimum = 0, first20 = null, first30 = null;
   for (const point of points.slice(peakIndex)) {
     const drawdown = point.close / peak - 1;
     minimum = Math.min(minimum, drawdown);
-    if (!first20 && drawdown <= -0.2 + 1e-10) first20 = point.date;
-    if (!first30 && drawdown <= -0.3 + 1e-10) first30 = point.date;
+    if (!first20 && drawdown <= Number(settings.qqqTrigger1) / 100 + 1e-10) first20 = point.date;
+    if (!first30 && drawdown <= Number(settings.qqqTrigger2) / 100 + 1e-10) first30 = point.date;
   }
   const latest = points.at(-1);
-  const value = { drawdown: { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date } };
-  strategyCache = { expires: Date.now() + 3600000, value };
-  return value;
+  return { drawdown: { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date, cycleId: `QQQ:${points[peakIndex].date}` } };
+}
+async function linkedStrategyFields(env, input, previous = null) {
+  const reason = input.reason || null;
+  if (!reason || !['BUY', 'SELL'].includes(input.trade_type)) return { reason, strategy_cycle_id: null, strategy_trigger: null };
+  if (previous?.reason === reason && previous.strategy_cycle_id) return { reason, strategy_cycle_id: previous.strategy_cycle_id, strategy_trigger: previous.strategy_trigger };
+  if (reason === 'QQQ_DRAWDOWN_1' || reason === 'QQQ_DRAWDOWN_2') {
+    const settings = await strategySettings(env) || STRATEGY_DEFAULTS;
+    const { drawdown } = await qqqStrategy(settings);
+    const required = reason === 'QQQ_DRAWDOWN_1' ? 1 : 2;
+    if (drawdown.stage < required) throw new Error('현재 QQQ Drawdown 조건과 거래 사유가 일치하지 않습니다.');
+    return { reason, strategy_cycle_id: drawdown.cycleId, strategy_trigger: required === 1 ? 'QQQ_20' : 'QQQ_30' };
+  }
+  if (reason === 'QLD_REBALANCE') {
+    const requestedCycle = typeof input.strategy_cycle_id === 'string' && /^QLD:\d{4}-\d{2}-\d{2}$/.test(input.strategy_cycle_id) ? input.strategy_cycle_id : null;
+    return { reason, strategy_cycle_id: requestedCycle || `QLD:${String(input.traded_at).slice(0, 10)}`, strategy_trigger: 'QLD_85' };
+  }
+  return { reason, strategy_cycle_id: null, strategy_trigger: null };
 }
 
 async function api(request, env, url) {
@@ -87,8 +139,35 @@ async function api(request, env, url) {
     if (!transactionResponse.ok || !snapshotResponse.ok) return json({ error: '데이터를 읽지 못했습니다.' }, 502);
     return json({ transactions: await transactionResponse.json(), snapshots: await snapshotResponse.json() });
   }
+  if (url.pathname === '/api/settings' && request.method === 'GET') {
+    try { return json({ settings: await strategySettings(env) }); } catch (error) { return json({ error: error.message }, 502); }
+  }
+  if (url.pathname === '/api/settings' && request.method === 'PUT') {
+    const input = await body(request);
+    if (!validSettings(input)) return json({ error: '투자전략 설정값을 확인하세요.' }, 400);
+    const createOnly = input.createOnly === true;
+    const response = await db(env, '/rest/v1/portfolio_strategy_settings?on_conflict=user_id', {
+      method: 'POST', headers: { Prefer: `${createOnly ? 'resolution=ignore-duplicates' : 'resolution=merge-duplicates'},return=representation` },
+      body: JSON.stringify({ user_id: env.PORTFOLIO_USER_ID, ...settingsToRow(input), updated_at: new Date().toISOString() }),
+    });
+    if (!response.ok) return json({ error: '투자전략을 저장하지 못했습니다.' }, 502);
+    const saved = settingsFromRow((await response.json())[0]);
+    if (saved) return json({ settings: saved });
+    try { return json({ settings: await strategySettings(env) }); } catch { return json({ error: '투자전략을 확인하지 못했습니다.' }, 502); }
+  }
   if (url.pathname === '/api/strategy' && request.method === 'GET') {
-    try { return json(await qqqStrategy()); } catch { return json({ drawdown: null }); }
+    try { return json(await qqqStrategy(await strategySettings(env) || STRATEGY_DEFAULTS)); } catch { return json({ drawdown: null }); }
+  }
+  if (url.pathname === '/api/benchmark' && request.method === 'GET') {
+    try {
+      const history = await qqqMarketHistory();
+      const adjustedAvailable = history.some(point => Number.isFinite(point.adjusted) && point.adjusted > 0);
+      return json({
+        basis: adjustedAvailable ? 'adjusted_close' : 'close',
+        points: history.filter(point => !adjustedAvailable || (Number.isFinite(point.adjusted) && point.adjusted > 0))
+          .map(point => ({ date: point.date, value: adjustedAvailable ? point.adjusted : point.close })),
+      });
+    } catch { return json({ basis: null, points: [], error: 'QQQ 벤치마크를 불러오지 못했습니다.' }, 502); }
   }
   if (url.pathname === '/api/quotes' && request.method === 'POST') {
     const input = await body(request), tickers = [...new Set(Array.isArray(input?.tickers) ? input.tickers.filter(ticker => typeof ticker === 'string' && /^[A-Z.]{1,15}$/i.test(ticker)).map(ticker => ticker.toUpperCase()) : [])];
@@ -103,8 +182,10 @@ async function api(request, env, url) {
     input.ticker = input.ticker.toUpperCase();
     const ledgerError = await validateAgainstLedger(env, input);
     if (ledgerError) return json({ error: ledgerError }, 400);
+    let strategyFields;
+    try { strategyFields = await linkedStrategyFields(env, input); } catch (error) { return json({ error: error.message }, 400); }
     if (['DEPOSIT', 'WITHDRAW'].includes(input.trade_type)) await snapshot(env, { action: 'cash-flow-boundary', cashFlow: input.trade_type === 'DEPOSIT' ? Number(input.amount) : -Number(input.amount), occurredAt: input.traded_at });
-    const response = await db(env, '/rest/v1/transactions', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...input, user_id: env.PORTFOLIO_USER_ID, memo: String(input.memo || '') }) });
+    const response = await db(env, '/rest/v1/transactions', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...input, ...strategyFields, user_id: env.PORTFOLIO_USER_ID, memo: String(input.memo || '') }) });
     if (!response.ok) return json({ error: '거래를 저장하지 못했습니다.' }, 502);
     const saved = await response.text(), snapshotUpdated = await snapshot(env);
     return new Response(saved, { status: 201, headers: { 'content-type': 'application/json', 'x-snapshot-updated': String(snapshotUpdated) } });
@@ -116,9 +197,11 @@ async function api(request, env, url) {
     input.ticker = input.ticker.toUpperCase();
     const ledgerError = await validateAgainstLedger(env, input, match[1]);
     if (ledgerError) return json({ error: ledgerError }, 400);
-    const existing = await db(env, `/rest/v1/transactions?select=traded_at&id=eq.${match[1]}&user_id=eq.${env.PORTFOLIO_USER_ID}&limit=1`);
+    const existing = await db(env, `/rest/v1/transactions?select=traded_at,reason,strategy_cycle_id,strategy_trigger&id=eq.${match[1]}&user_id=eq.${env.PORTFOLIO_USER_ID}&limit=1`);
     const previous = existing.ok ? (await existing.json())[0] : null;
-    const response = await db(env, `/rest/v1/transactions?id=eq.${match[1]}&user_id=eq.${env.PORTFOLIO_USER_ID}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...input, memo: String(input.memo || '') }) });
+    let strategyFields;
+    try { strategyFields = await linkedStrategyFields(env, input, previous); } catch (error) { return json({ error: error.message }, 400); }
+    const response = await db(env, `/rest/v1/transactions?id=eq.${match[1]}&user_id=eq.${env.PORTFOLIO_USER_ID}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...input, ...strategyFields, memo: String(input.memo || '') }) });
     if (!response.ok) return json({ error: '거래를 수정하지 못했습니다.' }, 502);
     await snapshot(env, { action: 'rebuild', from: [previous?.traded_at, input.traded_at].filter(Boolean).sort()[0] });
     return new Response(await response.text(), { headers: { 'content-type': 'application/json' } });

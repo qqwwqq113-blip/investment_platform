@@ -24,13 +24,17 @@ const snapshots = Array.from({ length: 12 }, (_, index) => ({
   twr_daily_return: index ? 0.002 : null,
   twr_coverage_start: '2026-09-08',
 }));
+const settings = { targetQQQ: 10, targetQLD: 70, targetSGOV: 20, qqqTrigger1: -20, qqqTrigger1SgovPct: 50, qqqTrigger2: -30, qqqTrigger2RemainingPct: 100, qldRebalanceTrigger: 85 };
+const benchmark = snapshots.filter(item => item.twr_daily_return !== null).map((item, index) => ({ date: item.snapshot_date, value: 500 + index * 2 }));
 const json = value => Buffer.from(JSON.stringify(value));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 const server = createServer(async (request, response) => {
   if (request.url === '/api/session') { response.setHeader('content-type', 'application/json'); response.end(json({ authenticated: true })); return; }
   if (request.url === '/api/data') { response.setHeader('content-type', 'application/json'); response.end(json({ transactions, snapshots })); return; }
-  if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18' } })); return; }
+  if (request.url === '/api/settings') { response.setHeader('content-type', 'application/json'); response.end(json({ settings })); return; }
+  if (request.url === '/api/benchmark') { response.setHeader('content-type', 'application/json'); response.end(json({ basis: 'adjusted_close', points: benchmark })); return; }
+  if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
   if (request.url === '/api/quotes') { response.setHeader('content-type', 'application/json'); response.end(json({ fetchedAt: new Date().toISOString(), quotes: [{ ticker: 'QQQ', price: 600 }, { ticker: 'QLD', price: 91 }, { ticker: 'SGOV', price: 100.5 }] })); return; }
   const path = request.url === '/' ? join(dist, 'index.html') : join(dist, request.url.replace(/^\//, ''));
   try { response.setHeader('content-type', types[extname(path)] || 'application/octet-stream'); response.end(await readFile(path)); } catch { response.statusCode = 404; response.end('not found'); }
@@ -39,7 +43,7 @@ await new Promise(resolvePromise => server.listen(0, '127.0.0.1', resolvePromise
 const port = server.address().port;
 const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
 try {
-  for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'tablet', width: 1024, height: 768 }, { name: 'mobile', width: 390, height: 844 }]) {
+  for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'tablet-landscape', width: 1024, height: 768 }, { name: 'tablet-portrait', width: 768, height: 1024 }, { name: 'mobile', width: 390, height: 844 }]) {
     const page = await browser.newPage({ viewport });
     const errors = [];
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -48,6 +52,12 @@ try {
     await page.locator('#total-equity').waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `${viewport.name}: horizontal overflow`);
     await page.screenshot({ path: join(tmpdir(), `portfolio-home-${viewport.name}.png`), fullPage: true });
+    await page.locator('[data-performance-view="benchmark"]').click();
+    await page.locator('#benchmark-chart svg').waitFor();
+    await page.screenshot({ path: join(tmpdir(), `portfolio-benchmark-${viewport.name}.png`), fullPage: true });
+    await page.locator('[data-page="settings"]').click();
+    assert.equal(await page.locator('#target-save').isEnabled(), true, `${viewport.name}: strategy form`);
+    await page.screenshot({ path: join(tmpdir(), `portfolio-settings-${viewport.name}.png`), fullPage: true });
     await page.locator('[data-page="portfolio"]').click();
     await page.locator('.holding-detail').first().click();
     await page.locator('[data-page="transactions"]').click();
@@ -57,7 +67,7 @@ try {
     assert.deepEqual(errors, [], `${viewport.name}: browser errors`);
     await page.close();
   }
-  console.log('Visual smoke passed: desktop, tablet, mobile.');
+  console.log('Visual smoke passed: desktop, tablet landscape, tablet portrait, mobile.');
 } finally {
   await browser.close();
   server.close();
