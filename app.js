@@ -358,8 +358,7 @@ function trade(type) {
   $('ticker').required = !isCash;
   $('quantity').required = !isCash;
   $('price-label').textContent = isCash ? '금액' : '단가';
-  if (isCash) { $('ticker').value = 'CASH'; $('quantity').value = '0'; $('fee').value = '0'; $('reason').value = ''; }
-  else if ($('ticker').value === 'CASH') $('ticker').value = '';
+  if (isCash) { $('quantity').value = '0'; $('fee').value = '0'; $('reason').value = ''; }
 }
 function resetForm() {
   editingId = null;
@@ -378,7 +377,7 @@ function startEdit(id) {
   $('cancel-edit').classList.remove('hidden');
   trade(row.trade_type);
   $('traded-at').value = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(row.traded_at)).replace(' ', 'T');
-  $('ticker').value = row.ticker;
+  if (!['DEPOSIT', 'WITHDRAW'].includes(row.trade_type)) $('ticker').value = row.ticker;
   $('quantity').value = row.quantity;
   $('price').value = row.price;
   $('fee').value = row.fee;

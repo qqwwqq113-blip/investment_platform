@@ -62,8 +62,9 @@ try {
     await page.locator('[data-page="portfolio"]').click();
     await page.locator('.holding-detail').first().click();
     await page.locator('[data-page="transactions"]').click();
+    assert.deepEqual(await page.locator('#ticker option').allTextContents(), ['QLD', 'QQQ', 'SGOV'], `${viewport.name}: ticker choices`);
     if (viewport.name === 'desktop') {
-      await page.locator('#ticker').fill('QQQ');
+      await page.locator('#ticker').selectOption('QQQ');
       await page.locator('#quantity').fill('1');
       await page.locator('#price').fill('600');
       await page.locator('#transaction-form button[type="submit"]').click();
