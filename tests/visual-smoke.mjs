@@ -36,6 +36,7 @@ const server = createServer(async (request, response) => {
   if (request.url === '/api/benchmark') { response.setHeader('content-type', 'application/json'); response.end(json({ basis: 'adjusted_close', points: benchmark })); return; }
   if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
   if (request.url === '/api/quotes') { response.setHeader('content-type', 'application/json'); response.end(json({ fetchedAt: new Date().toISOString(), quotes: [{ ticker: 'QQQ', price: 600 }, { ticker: 'QLD', price: 91 }, { ticker: 'SGOV', price: 100.5 }] })); return; }
+  if (request.url === '/api/transactions' && request.method === 'POST') { response.setHeader('content-type', 'application/json'); response.statusCode = 201; response.end(json({ id: '55555555-5555-4555-8555-555555555555' })); return; }
   const path = request.url === '/' ? join(dist, 'index.html') : join(dist, request.url.replace(/^\//, ''));
   try { response.setHeader('content-type', types[extname(path)] || 'application/octet-stream'); response.end(await readFile(path)); } catch { response.statusCode = 404; response.end('not found'); }
 });
@@ -61,6 +62,14 @@ try {
     await page.locator('[data-page="portfolio"]').click();
     await page.locator('.holding-detail').first().click();
     await page.locator('[data-page="transactions"]').click();
+    if (viewport.name === 'desktop') {
+      await page.locator('#ticker').fill('QQQ');
+      await page.locator('#quantity').fill('1');
+      await page.locator('#price').fill('600');
+      await page.locator('#transaction-form button[type="submit"]').click();
+      await page.locator('#toast.visible').waitFor();
+      assert.equal(await page.locator('#toast').textContent(), '매수 거래 입력이 완료되었습니다.');
+    }
     await page.locator('.more-button').first().click();
     assert.equal(await page.locator('.row-menu.open').count(), 1, `${viewport.name}: transaction menu`);
     await page.screenshot({ path: join(tmpdir(), `portfolio-transactions-${viewport.name}.png`), fullPage: true });

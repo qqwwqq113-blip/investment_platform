@@ -31,6 +31,7 @@ let cache = { rows: [], snaps: [], holdings: [], state: null, allocation: null, 
 let quotes = {};
 let quotesFetchedAt = null;
 let editingId = null;
+let toastTimer = null;
 let sessionToken = new URLSearchParams(location.hash.slice(1)).get('session') || '';
 if (sessionToken) history.replaceState(null, '', location.pathname);
 
@@ -54,6 +55,14 @@ function api(path, { method = 'GET', body } = {}) {
 }
 
 const notice = (text, error = false) => { $('notice').textContent = text; $('notice').classList.toggle('error', error); };
+function toast(text, error = false) {
+  const element = $('toast');
+  clearTimeout(toastTimer);
+  element.textContent = text;
+  element.classList.toggle('error', error);
+  element.classList.add('visible');
+  toastTimer = setTimeout(() => element.classList.remove('visible'), 4000);
+}
 const signed = value => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`;
 const now = () => {
   const date = new Date();
@@ -426,6 +435,7 @@ $('target-form').onsubmit = async event => {
 $('transaction-form').onsubmit = async event => {
   event.preventDefault();
   const type = $('trade-type').value, quantity = Number($('quantity').value), price = Number($('price').value), fee = Number($('fee').value);
+  const wasEditing = Boolean(editingId);
   const isCash = ['DEPOSIT', 'WITHDRAW'].includes(type);
   const reason = isCash ? null : ($('reason').value || null);
   const strategyCycleId = reason === 'QLD_REBALANCE' && cache.advice?.kind === 'RESET_TARGET' ? cache.advice.cycleId : null;
@@ -433,11 +443,17 @@ $('transaction-form').onsubmit = async event => {
   const rowsWithoutEditing = editingId ? cache.rows.filter(item => item.id !== editingId) : cache.rows;
   const errorMessage = validateTransaction(row, portfolioState(rowsWithoutEditing));
   if (errorMessage) { notice(errorMessage, true); return; }
-  const response = await api(editingId ? `/api/transactions/${encodeURIComponent(editingId)}` : '/api/transactions', { method: editingId ? 'PATCH' : 'POST', body: row });
-  if (response.error) { notice(`${editingId ? '수정' : '저장'}하지 못했습니다: ${response.error.message}`, true); return; }
-  notice(editingId ? '거래를 수정했습니다.' : '거래를 저장했습니다.');
-  resetForm();
-  await load();
+  const submitButton = $('transaction-form').querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    const response = await api(editingId ? `/api/transactions/${encodeURIComponent(editingId)}` : '/api/transactions', { method: editingId ? 'PATCH' : 'POST', body: row });
+    if (response.error) { notice(`${wasEditing ? '수정' : '저장'}하지 못했습니다: ${response.error.message}`, true); return; }
+    resetForm();
+    await load();
+    toast(`${tradeNames[type]} 거래 ${wasEditing ? '수정' : '입력'}이 완료되었습니다.`);
+  } finally {
+    submitButton.disabled = false;
+  }
 };
 $('transactions-list').onclick = event => {
   const menuId = event.target.dataset.menu;
