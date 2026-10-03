@@ -170,13 +170,12 @@ function renderBenchmark() {
 
 function renderAllocationHistory(snaps) {
   const points = filtered([...snaps].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date)));
-  const chart = $('allocation-history-chart'), tickers = ['QQQ', 'QLD', 'SGOV', 'CASH'];
+  const chart = $('allocation-history-chart'), tickers = ['QQQ', 'QLD', 'SGOV'];
   if (!points.length) { chart.innerHTML = '<p class="empty">선택한 기간의 스냅샷이 없습니다.</p>'; return; }
   const w = 720, h = 220, x = index => points.length === 1 ? w / 2 : 18 + index * (w - 36) / (points.length - 1);
   const weights = points.map(snapshot => {
     const data = Object.fromEntries(tickers.map(ticker => [ticker, 0]));
     (Array.isArray(snapshot.holdings) ? snapshot.holdings : []).forEach(item => { if (item.ticker in data) data[item.ticker] += Number(item.quantity) * Number(item.price); });
-    data.CASH = Number(snapshot.cash_balance) || 0;
     const total = Object.values(data).reduce((a, b) => a + b, 0) || 1;
     return Object.fromEntries(tickers.map(ticker => [ticker, data[ticker] / total * 100]));
   });
@@ -187,7 +186,7 @@ function renderAllocationHistory(snaps) {
     return `M ${top.map(pair => pair.join(' ')).join(' L ')} L ${bottom.map(pair => pair.join(' ')).join(' L ')} Z`;
   };
   chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${tickers.map(ticker => `<path d="${area(ticker)}" fill="${colors[ticker]}" fill-opacity=".78" stroke="#08111f"/>`).join('')}</svg>`;
-  attachTooltip(chart, points.map((snapshot, index) => ({ snapshot, weight: weights[index] })), item => `<b>${item.snapshot.snapshot_date}</b>${tickers.map(ticker => `<div>${ticker === 'CASH' ? '현금' : ticker} <b>${item.weight[ticker].toFixed(1)}%</b></div>`).join('')}`);
+  attachTooltip(chart, points.map((snapshot, index) => ({ snapshot, weight: weights[index] })), item => `<b>${item.snapshot.snapshot_date}</b>${tickers.map(ticker => `<div>${ticker} <b>${item.weight[ticker].toFixed(1)}%</b></div>`).join('')}`);
   const last = weights.at(-1);
   $('allocation-history-summary').textContent = `${points.at(-1).snapshot_date} 기준 · ${tickers.map(ticker => `${ticker} ${last[ticker].toFixed(1)}%`).join(' · ')}`;
 }
@@ -212,11 +211,12 @@ function transactionLine(row) {
 function renderTransactions() {
   const period = $('filter-period').value, ticker = $('filter-ticker').value, type = $('filter-type').value, reason = $('filter-reason').value;
   const after = period === 'ALL' ? null : Date.now() - Number(period) * 86400000;
-  const rows = cache.rows.filter(row => (!after || new Date(row.traded_at).getTime() >= after) && (ticker === 'ALL' || row.ticker === ticker) && (type === 'ALL' || row.trade_type === type)
+  const visibleRows = cache.rows.filter(row => ['BUY', 'SELL'].includes(row.trade_type));
+  const rows = visibleRows.filter(row => (!after || new Date(row.traded_at).getTime() >= after) && (ticker === 'ALL' || row.ticker === ticker) && (type === 'ALL' || row.trade_type === type)
     && (reason === 'ALL' || (reason === 'NONE' ? !row.reason : row.reason === reason)));
   $('transaction-count').textContent = `총 ${rows.length}건`;
-  $('recent-transactions').innerHTML = cache.rows.slice(0, 5).map(transactionLine).join('') || '<p class="empty">아직 저장된 거래가 없습니다.</p>';
-  $('transactions-list').innerHTML = rows.length ? `<table><thead><tr><th>일시</th><th>구분</th><th>종목</th><th>사유</th><th>수량</th><th>단가</th><th>금액</th><th>수수료</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td data-label="일시">${new Date(row.traded_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</td><td data-label="구분">${tradeNames[row.trade_type]}</td><td data-label="종목">${row.ticker}</td><td data-label="사유">${reasonNames[row.reason] || '—'}</td><td data-label="수량">${num.format(row.quantity)}</td><td data-label="단가">${['BUY', 'SELL'].includes(row.trade_type) ? usd.format(Number(row.price)) : '—'}</td><td data-label="금액">${usd.format(Number(row.amount))}</td><td data-label="수수료">${usd.format(Number(row.fee))}</td><td class="row-actions"><button class="more-button" aria-label="거래 메뉴" data-menu="${row.id}">⋮</button><div class="row-menu" data-menu-panel="${row.id}"><button data-edit="${row.id}">수정</button><button class="danger-text" data-delete="${row.id}">삭제</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="empty">조건에 맞는 거래가 없습니다.</p>';
+  $('recent-transactions').innerHTML = visibleRows.slice(0, 5).map(transactionLine).join('') || '<p class="empty">아직 저장된 거래가 없습니다.</p>';
+  $('transactions-list').innerHTML = rows.length ? `<table><thead><tr><th>일시</th><th>구분</th><th>종목</th><th>사유</th><th>수량</th><th>단가</th><th>금액</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td data-label="일시">${new Date(row.traded_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</td><td data-label="구분">${tradeNames[row.trade_type]}</td><td data-label="종목">${row.ticker}</td><td data-label="사유">${reasonNames[row.reason] || '—'}</td><td data-label="수량">${num.format(row.quantity)}</td><td data-label="단가">${usd.format(Number(row.price))}</td><td data-label="금액">${usd.format(Number(row.amount))}</td><td class="row-actions"><button class="more-button" aria-label="거래 메뉴" data-menu="${row.id}">⋮</button><div class="row-menu" data-menu-panel="${row.id}"><button data-edit="${row.id}">수정</button><button class="danger-text" data-delete="${row.id}">삭제</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="empty">조건에 맞는 거래가 없습니다.</p>';
 }
 
 function renderStrategy(allocation) {
@@ -286,12 +286,12 @@ function render() {
   $('total-equity').textContent = usd.format(equity);
   $('total-profit').textContent = `${profit >= 0 ? '+' : ''}${usd.format(profit)}`;
   $('total-return').textContent = returnRate === null ? '—' : signed(returnRate);
-  $('cash-weight').textContent = `${(equity > 0 ? state.cash / equity * 100 : 0).toFixed(1)}%`;
   ['total-profit', 'total-return'].forEach(id => { $(id).classList.toggle('positive', profit >= 0); $(id).classList.toggle('negative', profit < 0); });
   $('equity-label').textContent = hasLive ? '실시간 평가자산' : '최근 평가자산';
   $('profit-label').textContent = hasLive ? '실시간 평가손익' : '최근 평가손익';
   $('as-of').textContent = hasLive ? `Yahoo Finance · ${new Date(quotesFetchedAt).toLocaleString('ko-KR')} 기준` : last ? `최근 평가 기준일 ${last.snapshot_date}` : '거래 기록 기준';
   $('status-summary').textContent = `순입금 원금 ${usd.format(state.netContributions)} 대비 ${profit >= 0 ? '수익' : '손실'} ${profit >= 0 ? '+' : ''}${usd.format(profit)}`;
+  $('settlement-balance').textContent = `기존 매도대금 잔액 ${usd.format(Math.max(0, state.cash))} · 수수료 제외 기준`;
   const allocation = renderAllocation(holdings);
   renderPerformance(cache.snaps);
   renderAllocationHistory(cache.snaps);
@@ -303,7 +303,7 @@ function render() {
 
 function populateFilters() {
   const selected = $('filter-ticker').value;
-  const tickers = [...new Set(cache.rows.map(row => row.ticker))].sort();
+  const tickers = [...new Set(cache.rows.filter(row => ['BUY', 'SELL'].includes(row.trade_type)).map(row => row.ticker))].sort();
   $('filter-ticker').innerHTML = '<option value="ALL">전체 종목</option>' + tickers.map(ticker => `<option value="${ticker}">${ticker === 'CASH' ? '현금' : ticker}</option>`).join('');
   $('filter-ticker').value = tickers.includes(selected) ? selected : 'ALL';
 }
@@ -351,18 +351,14 @@ function page(name) {
 }
 function trade(type) {
   $('trade-type').value = type;
-  const isCash = ['DEPOSIT', 'WITHDRAW'].includes(type);
   document.querySelectorAll('.trade-type').forEach(element => element.classList.toggle('active', element.dataset.type === type));
-  document.querySelectorAll('.stock-field').forEach(element => element.classList.toggle('hidden', isCash));
-  document.querySelectorAll('.reason-field').forEach(element => element.classList.toggle('hidden', isCash));
-  $('ticker').required = !isCash;
-  $('quantity').required = !isCash;
-  $('price-label').textContent = isCash ? '금액' : '단가';
-  if (isCash) { $('quantity').value = '0'; $('fee').value = '0'; $('reason').value = ''; }
+  document.querySelectorAll('.funding-field').forEach(element => element.classList.toggle('hidden', type !== 'BUY' || Boolean(editingId)));
+  $('price-label').textContent = '단가';
 }
 function resetForm() {
   editingId = null;
   $('transaction-form').reset();
+  document.querySelectorAll('.trade-type').forEach(element => { element.disabled = false; });
   $('traded-at').value = now();
   $('transaction-form-title').textContent = '거래 추가';
   $('cancel-edit').classList.add('hidden');
@@ -376,11 +372,11 @@ function startEdit(id) {
   $('transaction-form-title').textContent = '거래 수정';
   $('cancel-edit').classList.remove('hidden');
   trade(row.trade_type);
+  document.querySelectorAll('.trade-type').forEach(element => { element.disabled = true; });
   $('traded-at').value = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(row.traded_at)).replace(' ', 'T');
   if (!['DEPOSIT', 'WITHDRAW'].includes(row.trade_type)) $('ticker').value = row.ticker;
   $('quantity').value = row.quantity;
   $('price').value = row.price;
-  $('fee').value = row.fee;
   $('reason').value = row.reason || '';
   $('memo').value = row.memo || '';
   $('transaction-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -433,15 +429,19 @@ $('target-form').onsubmit = async event => {
 };
 $('transaction-form').onsubmit = async event => {
   event.preventDefault();
-  const type = $('trade-type').value, quantity = Number($('quantity').value), price = Number($('price').value), fee = Number($('fee').value);
+  const type = $('trade-type').value, quantity = Number($('quantity').value), price = Number($('price').value);
   const wasEditing = Boolean(editingId);
-  const isCash = ['DEPOSIT', 'WITHDRAW'].includes(type);
-  const reason = isCash ? null : ($('reason').value || null);
+  const reason = $('reason').value || null;
   const strategyCycleId = reason === 'QLD_REBALANCE' && cache.advice?.kind === 'RESET_TARGET' ? cache.advice.cycleId : null;
-  const row = { traded_at: new Date(`${$('traded-at').value}:00+09:00`).toISOString(), trade_type: type, ticker: isCash ? 'CASH' : $('ticker').value.trim().toUpperCase(), quantity: isCash ? 0 : quantity, price, amount: isCash ? price : quantity * price, fee: isCash ? 0 : fee, reason, strategy_cycle_id: strategyCycleId, memo: $('memo').value.trim() };
+  const row = { traded_at: new Date(`${$('traded-at').value}:00+09:00`).toISOString(), trade_type: type, ticker: $('ticker').value, quantity, price, amount: quantity * price, fee: 0, reason, strategy_cycle_id: strategyCycleId, memo: $('memo').value.trim() };
+  if (!wasEditing && type === 'BUY') row.funding_source = $('funding-source').value;
   const rowsWithoutEditing = editingId ? cache.rows.filter(item => item.id !== editingId) : cache.rows;
   const errorMessage = validateTransaction(row, portfolioState(rowsWithoutEditing));
   if (errorMessage) { notice(errorMessage, true); return; }
+  if (!wasEditing && type === 'BUY' && row.funding_source === 'SETTLEMENT' && row.amount > portfolioState(rowsWithoutEditing).cash + 0.005) {
+    notice('기존 매도대금 잔액보다 많이 매수할 수 없습니다.', true);
+    return;
+  }
   const submitButton = $('transaction-form').querySelector('button[type="submit"]');
   submitButton.disabled = true;
   try {

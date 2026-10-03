@@ -56,7 +56,6 @@ export function portfolioState(rows) {
 
   for (const row of ascending(rows)) {
     const amount = n(row.amount);
-    const fee = n(row.fee);
     const quantity = n(row.quantity);
     if (row.trade_type === 'DEPOSIT') {
       cash += amount;
@@ -76,7 +75,7 @@ export function portfolioState(rows) {
       realizedProfit: 0,
     };
     if (row.trade_type === 'BUY') {
-      const acquisitionCost = amount + fee;
+      const acquisitionCost = amount;
       cash -= acquisitionCost;
       holding.quantity += quantity;
       holding.cost += acquisitionCost;
@@ -85,13 +84,13 @@ export function portfolioState(rows) {
       const sold = Math.min(holding.quantity, quantity);
       const ratio = sold / holding.quantity;
       const removedCost = holding.cost * ratio;
-      const netProceeds = quantity > 0 ? (amount - fee) * (sold / quantity) : 0;
+      const netProceeds = quantity > 0 ? amount * (sold / quantity) : 0;
       const gain = netProceeds - removedCost;
       holding.cost -= removedCost;
       holding.quantity -= sold;
       holding.realizedProfit += gain;
       realizedProfit += gain;
-      cash += amount - fee;
+      cash += amount;
     }
     holdings.set(row.ticker, holding);
   }
@@ -345,9 +344,8 @@ export function validateTransaction(input, currentState) {
   const quantity = n(input.quantity);
   const price = n(input.price);
   const amount = n(input.amount);
-  const fee = n(input.fee);
   if (!['BUY', 'SELL', 'DEPOSIT', 'WITHDRAW'].includes(type)) return '거래 유형을 확인하세요.';
-  if ([quantity, price, amount, fee].some(value => value < 0 || !Number.isFinite(value))) return '금액과 수량은 0 이상이어야 합니다.';
+  if ([quantity, price, amount].some(value => value < 0 || !Number.isFinite(value))) return '금액과 수량은 0 이상이어야 합니다.';
   if (['BUY', 'SELL'].includes(type) && (!input.ticker || quantity <= 0 || price <= 0)) return '종목, 수량, 단가를 확인하세요.';
   if (['DEPOSIT', 'WITHDRAW'].includes(type) && amount <= 0) return '금액을 확인하세요.';
   if (type === 'SELL') {

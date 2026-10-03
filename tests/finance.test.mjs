@@ -19,7 +19,7 @@ import {
   validateTransaction,
   validateStrategy,
 } from '../finance.js';
-import { validSettings as validServerSettings } from '../worker.js';
+import { settlementBalance, validSettings as validServerSettings } from '../worker.js';
 
 const row = (trade_type, ticker, quantity, price, amount, fee = 0, traded_at = '2026-01-01T00:00:00Z') => ({
   trade_type, ticker, quantity, price, amount, fee, traded_at,
@@ -32,9 +32,25 @@ test('평균원가와 실현손익을 계산한다', () => {
     row('SELL', 'QQQ', 4, 120, 480, 2, '2026-01-03T00:00:00Z'),
   ]);
   assert.equal(state.holdings[0].quantity, 6);
-  assert.equal(state.holdings[0].cost, 606);
-  assert.equal(state.realizedProfit, 74);
-  assert.equal(state.cash, 1468);
+  assert.equal(state.holdings[0].cost, 600);
+  assert.equal(state.realizedProfit, 80);
+  assert.equal(state.cash, 1480);
+});
+
+test('거래 수수료는 포트폴리오 원가와 정산 잔액에서 제외한다', () => {
+  const state = portfolioState([row('DEPOSIT', 'CASH', 0, 0, 1000), row('BUY', 'QLD', 10, 100, 1000, 25)]);
+  assert.equal(state.cash, 0);
+  assert.equal(state.holdings[0].cost, 1000);
+});
+
+test('종목 이동 후 남은 금액을 내부 정산 잔액으로 유지한다', () => {
+  const rows = [
+    row('DEPOSIT', 'CASH', 0, 0, 1000),
+    row('BUY', 'SGOV', 10, 100, 1000, 5),
+    row('SELL', 'SGOV', 5, 101, 505, 2),
+    row('BUY', 'QLD', 5, 90, 450, 3),
+  ];
+  assert.equal(settlementBalance(rows), 55);
 });
 
 test('계좌 손익은 순입금 원금과 비교한다', () => {

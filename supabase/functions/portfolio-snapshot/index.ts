@@ -16,17 +16,17 @@ function portfolioState(rows: Transaction[], throughDate?: string) {
   const ordered = [...rows].sort((a, b) => String(a.traded_at).localeCompare(String(b.traded_at)));
   for (const row of ordered) {
     if (throughDate && kstDate(row.traded_at) > throughDate) continue;
-    const amount = asNumber(row.amount), fee = asNumber(row.fee), quantity = asNumber(row.quantity);
+    const amount = asNumber(row.amount), quantity = asNumber(row.quantity);
     if (row.trade_type === "DEPOSIT") { cash += amount; deposits += amount; }
     else if (row.trade_type === "WITHDRAW") { cash -= amount; withdrawals += amount; }
     else if (row.trade_type === "BUY") {
-      cash -= amount + fee;
+      cash -= amount;
       const holding = holdings.get(row.ticker) || { ticker: row.ticker, quantity: 0, cost: 0 };
       holding.quantity += quantity;
-      holding.cost += amount + fee;
+      holding.cost += amount;
       holdings.set(row.ticker, holding);
     } else if (row.trade_type === "SELL") {
-      cash += amount - fee;
+      cash += amount;
       const holding = holdings.get(row.ticker);
       if (!holding || holding.quantity <= 0) continue;
       const sold = Math.min(holding.quantity, quantity);

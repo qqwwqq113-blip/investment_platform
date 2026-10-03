@@ -34,6 +34,15 @@ function valid(row) {
   if (['BUY', 'SELL'].includes(row.trade_type)) return Number(row.quantity) > 0 && Number(row.price) > 0;
   return Number(row.amount) > 0 && row.ticker.toUpperCase() === 'CASH';
 }
+export function settlementBalance(rows, excludedId) {
+  return rows.filter(row => !excludedId || row.id !== excludedId).reduce((cash, row) => {
+    if (row.trade_type === 'DEPOSIT') return cash + Number(row.amount);
+    if (row.trade_type === 'WITHDRAW') return cash - Number(row.amount);
+    if (row.trade_type === 'BUY') return cash - Number(row.amount);
+    if (row.trade_type === 'SELL') return cash + Number(row.amount);
+    return cash;
+  }, 0);
+}
 
 const settingsFromRow = row => row ? ({
   targetQQQ: Number(row.target_qqq), targetQLD: Number(row.target_qld), targetSGOV: Number(row.target_sgov),
@@ -69,10 +78,11 @@ function quantityAvailable(rows, ticker, excludedId) {
   return rows.filter(row => row.id !== excludedId && row.ticker === ticker).reduce((quantity, row) => row.trade_type === 'BUY' ? quantity + Number(row.quantity) : row.trade_type === 'SELL' ? quantity - Number(row.quantity) : quantity, 0);
 }
 async function validateAgainstLedger(env, input, excludedId) {
-  if (input.trade_type !== 'SELL') return null;
+  if (input.trade_type !== 'SELL' && !(input.trade_type === 'BUY' && input.funding_source === 'SETTLEMENT')) return null;
   const rows = await transactions(env);
   if (!rows) return '보유 수량을 확인하지 못했습니다.';
-  return Number(input.quantity) > quantityAvailable(rows, input.ticker.toUpperCase(), excludedId) + 1e-7 ? '보유 수량보다 많이 매도할 수 없습니다.' : null;
+  if (input.trade_type === 'SELL') return Number(input.quantity) > quantityAvailable(rows, input.ticker.toUpperCase(), excludedId) + 1e-7 ? '보유 수량보다 많이 매도할 수 없습니다.' : null;
+  return Number(input.amount) > settlementBalance(rows, excludedId) + 0.005 ? '기존 매도대금 잔액보다 많이 매수할 수 없습니다.' : null;
 }
 async function qqqMarketHistory() {
   if (marketCache.value && marketCache.expires > Date.now()) return marketCache.value;
@@ -180,15 +190,25 @@ async function api(request, env, url) {
     const input = await body(request);
     if (!valid(input)) return json({ error: '거래 입력값을 확인하세요.' }, 400);
     input.ticker = input.ticker.toUpperCase();
+    if (input.trade_type === 'BUY' && !['NEW_CAPITAL', 'SETTLEMENT'].includes(input.funding_source)) return json({ error: '매수 자금 구분을 확인하세요.' }, 400);
     const ledgerError = await validateAgainstLedger(env, input);
     if (ledgerError) return json({ error: ledgerError }, 400);
     let strategyFields;
     try { strategyFields = await linkedStrategyFields(env, input); } catch (error) { return json({ error: error.message }, 400); }
-    if (['DEPOSIT', 'WITHDRAW'].includes(input.trade_type)) await snapshot(env, { action: 'cash-flow-boundary', cashFlow: input.trade_type === 'DEPOSIT' ? Number(input.amount) : -Number(input.amount), occurredAt: input.traded_at });
-    const response = await db(env, '/rest/v1/transactions', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...input, ...strategyFields, user_id: env.PORTFOLIO_USER_ID, memo: String(input.memo || '') }) });
+    const isNewCapital = input.trade_type === 'BUY' && input.funding_source === 'NEW_CAPITAL';
+    if (isNewCapital) await snapshot(env, { action: 'cash-flow-boundary', cashFlow: Number(input.amount), occurredAt: input.traded_at });
+    const buyId = crypto.randomUUID();
+    const transaction = { ...input, ...strategyFields, id: buyId, user_id: env.PORTFOLIO_USER_ID, fee: 0, memo: String(input.memo || '') };
+    delete transaction.funding_source;
+    const records = isNewCapital ? [{
+      id: crypto.randomUUID(), user_id: env.PORTFOLIO_USER_ID, traded_at: input.traded_at, trade_type: 'DEPOSIT', ticker: 'CASH',
+      quantity: 0, price: Number(input.amount), amount: Number(input.amount), fee: 0, reason: null, strategy_cycle_id: null, strategy_trigger: null,
+      memo: `AUTO_FUND:${buyId}`,
+    }, transaction] : [transaction];
+    const response = await db(env, '/rest/v1/transactions', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify(records) });
     if (!response.ok) return json({ error: '거래를 저장하지 못했습니다.' }, 502);
-    const saved = await response.text(), snapshotUpdated = await snapshot(env);
-    return new Response(saved, { status: 201, headers: { 'content-type': 'application/json', 'x-snapshot-updated': String(snapshotUpdated) } });
+    const saved = await response.json(), snapshotUpdated = await snapshot(env);
+    return json(Array.isArray(saved) ? saved.find(row => row.id === buyId) || saved.at(-1) : saved, 201, { 'x-snapshot-updated': String(snapshotUpdated) });
   }
   const match = url.pathname.match(/^\/api\/transactions\/([0-9a-f-]{36})$/i);
   if (match && request.method === 'PATCH') {
@@ -203,6 +223,9 @@ async function api(request, env, url) {
     try { strategyFields = await linkedStrategyFields(env, input, previous); } catch (error) { return json({ error: error.message }, 400); }
     const response = await db(env, `/rest/v1/transactions?id=eq.${match[1]}&user_id=eq.${env.PORTFOLIO_USER_ID}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...input, ...strategyFields, memo: String(input.memo || '') }) });
     if (!response.ok) return json({ error: '거래를 수정하지 못했습니다.' }, 502);
+    const autoFundPath = `/rest/v1/transactions?user_id=eq.${env.PORTFOLIO_USER_ID}&memo=eq.${encodeURIComponent(`AUTO_FUND:${match[1]}`)}`;
+    if (input.trade_type === 'BUY') await db(env, autoFundPath, { method: 'PATCH', body: JSON.stringify({ traded_at: input.traded_at, price: Number(input.amount), amount: Number(input.amount), fee: 0 }) });
+    else await db(env, autoFundPath, { method: 'DELETE' });
     await snapshot(env, { action: 'rebuild', from: [previous?.traded_at, input.traded_at].filter(Boolean).sort()[0] });
     return new Response(await response.text(), { headers: { 'content-type': 'application/json' } });
   }
@@ -211,6 +234,7 @@ async function api(request, env, url) {
     const previous = existing.ok ? (await existing.json())[0] : null;
     const response = await db(env, `/rest/v1/transactions?id=eq.${match[1]}&user_id=eq.${env.PORTFOLIO_USER_ID}`, { method: 'DELETE' });
     if (!response.ok) return json({ error: '거래를 삭제하지 못했습니다.' }, 502);
+    await db(env, `/rest/v1/transactions?user_id=eq.${env.PORTFOLIO_USER_ID}&memo=eq.${encodeURIComponent(`AUTO_FUND:${match[1]}`)}`, { method: 'DELETE' });
     await snapshot(env, { action: 'rebuild', from: previous?.traded_at });
     return new Response(null, { status: 204 });
   }

@@ -28,6 +28,7 @@ const settings = { targetQQQ: 10, targetQLD: 70, targetSGOV: 20, qqqTrigger1: -2
 const benchmark = snapshots.filter(item => item.twr_daily_return !== null).map((item, index) => ({ date: item.snapshot_date, value: 500 + index * 2 }));
 const json = value => Buffer.from(JSON.stringify(value));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+let postedTransaction = null;
 
 const server = createServer(async (request, response) => {
   if (request.url === '/api/session') { response.setHeader('content-type', 'application/json'); response.end(json({ authenticated: true })); return; }
@@ -36,7 +37,12 @@ const server = createServer(async (request, response) => {
   if (request.url === '/api/benchmark') { response.setHeader('content-type', 'application/json'); response.end(json({ basis: 'adjusted_close', points: benchmark })); return; }
   if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
   if (request.url === '/api/quotes') { response.setHeader('content-type', 'application/json'); response.end(json({ fetchedAt: new Date().toISOString(), quotes: [{ ticker: 'QQQ', price: 600 }, { ticker: 'QLD', price: 91 }, { ticker: 'SGOV', price: 100.5 }] })); return; }
-  if (request.url === '/api/transactions' && request.method === 'POST') { response.setHeader('content-type', 'application/json'); response.statusCode = 201; response.end(json({ id: '55555555-5555-4555-8555-555555555555' })); return; }
+  if (request.url === '/api/transactions' && request.method === 'POST') {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    postedTransaction = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    response.setHeader('content-type', 'application/json'); response.statusCode = 201; response.end(json({ id: '55555555-5555-4555-8555-555555555555' })); return;
+  }
   const path = request.url === '/' ? join(dist, 'index.html') : join(dist, request.url.replace(/^\//, ''));
   try { response.setHeader('content-type', types[extname(path)] || 'application/octet-stream'); response.end(await readFile(path)); } catch { response.statusCode = 404; response.end('not found'); }
 });
@@ -51,6 +57,7 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' });
     await page.locator('#total-equity').waitFor();
+    assert.equal(await page.locator('#cash-weight').count(), 0, `${viewport.name}: cash metric removed`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `${viewport.name}: horizontal overflow`);
     await page.screenshot({ path: join(tmpdir(), `portfolio-home-${viewport.name}.png`), fullPage: true });
     await page.locator('[data-performance-view="benchmark"]').click();
@@ -63,6 +70,9 @@ try {
     await page.locator('.holding-detail').first().click();
     await page.locator('[data-page="transactions"]').click();
     assert.deepEqual(await page.locator('#ticker option').allTextContents(), ['QLD', 'QQQ', 'SGOV'], `${viewport.name}: ticker choices`);
+    assert.deepEqual(await page.locator('.trade-type').allTextContents(), ['매수', '매도'], `${viewport.name}: stock transactions only`);
+    assert.equal(await page.locator('#fee').count(), 0, `${viewport.name}: fee input removed`);
+    assert.equal(await page.locator('#funding-source').inputValue(), 'NEW_CAPITAL', `${viewport.name}: new capital default`);
     if (viewport.name === 'desktop') {
       await page.locator('#ticker').selectOption('QQQ');
       await page.locator('#quantity').fill('1');
@@ -70,6 +80,8 @@ try {
       await page.locator('#transaction-form button[type="submit"]').click();
       await page.locator('#toast.visible').waitFor();
       assert.equal(await page.locator('#toast').textContent(), '매수 거래 입력이 완료되었습니다.');
+      assert.equal(postedTransaction.funding_source, 'NEW_CAPITAL');
+      assert.equal(postedTransaction.fee, 0);
     }
     await page.locator('.more-button').first().click();
     assert.equal(await page.locator('.row-menu.open').count(), 1, `${viewport.name}: transaction menu`);
