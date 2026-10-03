@@ -25,9 +25,10 @@ const num = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
 const colors = { QQQ: '#64a4ff', QLD: '#f5a524', SGOV: '#44c18a', CASH: '#8fa3b8' };
 const tradeNames = { BUY: '매수', SELL: '매도', DEPOSIT: '입금', WITHDRAW: '출금' };
 const reasonNames = { REGULAR_BUY: '정기매수', QQQ_DRAWDOWN_1: 'QQQ 1차 대응', QQQ_DRAWDOWN_2: 'QQQ 2차 대응', QLD_REBALANCE: 'QLD 복귀', NEW_CAPITAL: '신규자금', OTHER: '기타' };
+const adjustmentReasonNames = { FEES_FX: '수수료·환전 차이', MISSING_FLOW: '누락된 입금·출금', DIVIDEND_INTEREST: '배당·이자', EXECUTION_ROUNDING: '체결·반올림 차이', OTHER: '기타 원장 보정' };
 let range = 'ALL';
 let performanceView = 'value';
-let cache = { rows: [], snaps: [], holdings: [], state: null, allocation: null, drawdown: null, advice: null, settings: { ...STRATEGY_DEFAULTS }, benchmark: { basis: null, points: [] } };
+let cache = { rows: [], adjustments: [], snaps: [], holdings: [], state: null, allocation: null, drawdown: null, advice: null, settings: { ...STRATEGY_DEFAULTS }, benchmark: { basis: null, points: [] } };
 let quotes = {};
 let quotesFetchedAt = null;
 let editingId = null;
@@ -275,7 +276,7 @@ function renderAllocation(holdings) {
 }
 
 function render() {
-  const state = portfolioState(cache.rows);
+  const state = portfolioState([...cache.rows, ...cache.adjustments.map(item => ({ ...item, trade_type: 'ADJUSTMENT', traded_at: item.adjusted_at }))]);
   const holdings = enrichHoldings(state, quotes);
   const hasLive = holdings.length > 0 && holdings.every(item => item.currentPrice !== null);
   const account = accountMetrics(state, holdings);
@@ -292,6 +293,7 @@ function render() {
   $('as-of').textContent = hasLive ? `Yahoo Finance · ${new Date(quotesFetchedAt).toLocaleString('ko-KR')} 기준` : last ? `최근 평가 기준일 ${last.snapshot_date}` : '거래 기록 기준';
   $('status-summary').textContent = `순입금 원금 ${usd.format(state.netContributions)} 대비 ${profit >= 0 ? '수익' : '손실'} ${profit >= 0 ? '+' : ''}${usd.format(profit)}`;
   $('settlement-balance').textContent = `기존 매도대금 잔액 ${usd.format(Math.max(0, state.cash))} · 수수료 제외 기준`;
+  renderAdjustments(state.cash);
   const allocation = renderAllocation(holdings);
   renderPerformance(cache.snaps);
   renderAllocationHistory(cache.snaps);
@@ -299,6 +301,25 @@ function render() {
   cache = { ...cache, state, holdings };
   populateFilters();
   renderTransactions();
+}
+
+function renderAdjustments(balance) {
+  $('settlement-card-balance').textContent = usd.format(balance);
+  const latest = cache.adjustments[0];
+  $('last-adjustment').textContent = latest ? new Date(latest.adjusted_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : '기록 없음';
+  const reversed = new Set(cache.adjustments.filter(item => item.reversed_adjustment_id).map(item => item.reversed_adjustment_id));
+  $('adjustment-history').innerHTML = cache.adjustments.length ? cache.adjustments.slice(0, 8).map(item => {
+    const isReversal = Boolean(item.reversed_adjustment_id), canReverse = !isReversal && !reversed.has(item.id);
+    return `<div class="adjustment-row"><span>${new Date(item.adjusted_at).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })}</span><div><b>${isReversal ? '보정 취소' : adjustmentReasonNames[item.adjustment_reason]}</b><small>${item.memo || '메모 없음'}</small></div><strong class="${Number(item.adjustment_amount) >= 0 ? 'positive' : 'negative'}">${Number(item.adjustment_amount) >= 0 ? '+' : ''}${usd.format(Number(item.adjustment_amount))}</strong>${canReverse ? `<button class="ghost" data-reverse-adjustment="${item.id}">취소</button>` : '<span></span>'}</div>`;
+  }).join('') : '<p class="empty small">아직 보정 기록이 없습니다.</p>';
+}
+
+function updateAdjustmentPreview() {
+  const current = Number(cache.state?.cash || 0), actual = Number($('actual-balance').value), valid = Number.isFinite(actual) && actual >= 0;
+  const difference = actual - current;
+  $('adjustment-preview').textContent = valid ? usd.format(actual) : '—';
+  $('adjustment-effect').innerHTML = valid ? `잔액을 <strong>${difference >= 0 ? '+' : ''}${usd.format(difference)}</strong> 보정합니다. ${['DIVIDEND_INTEREST', 'EXECUTION_ROUNDING'].includes($('adjustment-reason').value) ? '수익률에는 반영하고 원금은 바꾸지 않습니다.' : '외부 자금 흐름으로 처리해 원금도 함께 조정합니다.'}` : '실제 잔액을 입력하면 차이를 미리 보여드립니다.';
+  $('save-adjustment').disabled = !valid || Math.abs(difference) < 0.01;
 }
 
 function populateFilters() {
@@ -337,6 +358,7 @@ async function load() {
   if (portfolioResponse.status === 401) { showAuth(); return; }
   if (portfolioResponse.error) { notice(`데이터를 불러오지 못했습니다: ${portfolioResponse.error.message}`, true); return; }
   cache.rows = portfolioResponse.data.transactions || [];
+  cache.adjustments = portfolioResponse.data.adjustments || [];
   cache.snaps = portfolioResponse.data.snapshots || [];
   cache.drawdown = strategyResponse.data?.drawdown || null;
   cache.benchmark = benchmarkResponse.data || { basis: null, points: [] };
@@ -414,6 +436,42 @@ document.querySelectorAll('[data-performance-view]').forEach(element => { elemen
 document.querySelectorAll('.trade-type').forEach(element => { element.onclick = () => trade(element.dataset.type); });
 $('refresh').onclick = load;
 $('cancel-edit').onclick = resetForm;
+$('open-adjustment').onclick = () => {
+  $('adjustment-current').textContent = usd.format(cache.state.cash);
+  $('actual-balance').value = Math.max(0, cache.state.cash).toFixed(2);
+  $('adjusted-at').value = now();
+  $('adjustment-memo').value = '';
+  updateAdjustmentPreview();
+  $('adjustment-dialog').showModal();
+};
+$('close-adjustment').onclick = () => $('adjustment-dialog').close();
+$('actual-balance').oninput = updateAdjustmentPreview;
+$('adjustment-reason').onchange = updateAdjustmentPreview;
+$('adjustment-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = $('save-adjustment');
+  button.disabled = true;
+  const response = await api('/api/settlement-adjustments', { method: 'POST', body: {
+    expectedBalance: cache.state.cash,
+    actualBalance: Number($('actual-balance').value),
+    adjustedAt: new Date(`${$('adjusted-at').value}:00+09:00`).toISOString(),
+    reason: $('adjustment-reason').value,
+    memo: $('adjustment-memo').value.trim(),
+  } });
+  if (response.error) { toast(response.error.message, true); button.disabled = false; return; }
+  $('adjustment-dialog').close();
+  await load();
+  toast('정산 잔액 보정이 완료되었습니다.');
+};
+$('adjustment-history').onclick = async event => {
+  const id = event.target.dataset.reverseAdjustment;
+  if (!id || !confirm('이 보정 기록을 취소하시겠습니까? 반대 금액의 취소 기록이 남습니다.')) return;
+  event.target.disabled = true;
+  const response = await api(`/api/settlement-adjustments/${encodeURIComponent(id)}/reverse`, { method: 'POST', body: { adjustedAt: new Date().toISOString() } });
+  if (response.error) { toast(response.error.message, true); event.target.disabled = false; return; }
+  await load();
+  toast('잔액 보정을 취소했습니다.');
+};
 ['filter-period', 'filter-ticker', 'filter-type', 'filter-reason'].forEach(id => { $(id).onchange = renderTransactions; });
 ['target-qqq', 'target-qld', 'target-sgov', 'trigger-1', 'trigger-1-sgov', 'trigger-2', 'trigger-2-sgov', 'qld-trigger'].forEach(id => { $(id).oninput = () => validateTargetForm(true); });
 $('target-form').onsubmit = async event => {
@@ -435,7 +493,8 @@ $('transaction-form').onsubmit = async event => {
   const strategyCycleId = reason === 'QLD_REBALANCE' && cache.advice?.kind === 'RESET_TARGET' ? cache.advice.cycleId : null;
   const row = { traded_at: new Date(`${$('traded-at').value}:00+09:00`).toISOString(), trade_type: type, ticker: $('ticker').value, quantity, price, amount: quantity * price, fee: 0, reason, strategy_cycle_id: strategyCycleId, memo: $('memo').value.trim() };
   if (!wasEditing && type === 'BUY') row.funding_source = $('funding-source').value;
-  const rowsWithoutEditing = editingId ? cache.rows.filter(item => item.id !== editingId) : cache.rows;
+  const adjustmentRows = cache.adjustments.map(item => ({ ...item, trade_type: 'ADJUSTMENT', traded_at: item.adjusted_at }));
+  const rowsWithoutEditing = [...(editingId ? cache.rows.filter(item => item.id !== editingId) : cache.rows), ...adjustmentRows];
   const errorMessage = validateTransaction(row, portfolioState(rowsWithoutEditing));
   if (errorMessage) { notice(errorMessage, true); return; }
   if (!wasEditing && type === 'BUY' && row.funding_source === 'SETTLEMENT' && row.amount > portfolioState(rowsWithoutEditing).cash + 0.005) {

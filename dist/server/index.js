@@ -37,12 +37,26 @@ function valid(row) {
 }
 export function settlementBalance(rows, excludedId) {
   return rows.filter(row => !excludedId || row.id !== excludedId).reduce((cash, row) => {
+    if (row.trade_type === 'ADJUSTMENT') return cash + Number(row.adjustment_amount);
     if (row.trade_type === 'DEPOSIT') return cash + Number(row.amount);
     if (row.trade_type === 'WITHDRAW') return cash - Number(row.amount);
     if (row.trade_type === 'BUY') return cash - Number(row.amount);
     if (row.trade_type === 'SELL') return cash + Number(row.amount);
     return cash;
   }, 0);
+}
+
+const adjustmentRow = row => ({ ...row, trade_type: 'ADJUSTMENT', traded_at: row.adjusted_at });
+const adjustmentReasons = new Set(['FEES_FX', 'MISSING_FLOW', 'DIVIDEND_INTEREST', 'EXECUTION_ROUNDING', 'OTHER']);
+const contributionDelta = (reason, amount) => reason === 'DIVIDEND_INTEREST' || reason === 'EXECUTION_ROUNDING' ? 0 : amount;
+async function adjustments(env) {
+  const response = await db(env, `/rest/v1/settlement_adjustments?select=*&user_id=eq.${env.PORTFOLIO_USER_ID}&order=adjusted_at.asc`);
+  return response.ok ? response.json() : null;
+}
+async function ledgerRows(env) {
+  const [transactionRows, adjustmentRows] = await Promise.all([transactions(env), adjustments(env)]);
+  if (!transactionRows || !adjustmentRows) return null;
+  return [...transactionRows, ...adjustmentRows.map(adjustmentRow)];
 }
 
 const settingsFromRow = row => row ? ({
@@ -80,7 +94,7 @@ function quantityAvailable(rows, ticker, excludedId) {
 }
 async function validateAgainstLedger(env, input, excludedId) {
   if (input.trade_type !== 'SELL' && !(input.trade_type === 'BUY' && input.funding_source === 'SETTLEMENT')) return null;
-  const rows = await transactions(env);
+  const rows = await ledgerRows(env);
   if (!rows) return '보유 수량을 확인하지 못했습니다.';
   if (input.trade_type === 'SELL') return Number(input.quantity) > quantityAvailable(rows, input.ticker.toUpperCase(), excludedId) + 1e-7 ? '보유 수량보다 많이 매도할 수 없습니다.' : null;
   return Number(input.amount) > settlementBalance(rows, excludedId) + 0.005 ? '기존 매도대금 잔액보다 많이 매수할 수 없습니다.' : null;
@@ -143,12 +157,41 @@ async function api(request, env, url) {
   }
   if (!await allowed(request, env)) return json({ error: '접근 권한이 없습니다.' }, 401);
   if (url.pathname === '/api/data' && request.method === 'GET') {
-    const [transactionResponse, snapshotResponse] = await Promise.all([
+    const [transactionResponse, snapshotResponse, adjustmentResponse] = await Promise.all([
       db(env, `/rest/v1/transactions?select=*&user_id=eq.${env.PORTFOLIO_USER_ID}&order=traded_at.desc`),
       db(env, `/rest/v1/daily_snapshots?select=snapshot_date,total_equity,total_cost,net_contributions,cash_balance,holdings,twr_daily_return,twr_coverage_start&user_id=eq.${env.PORTFOLIO_USER_ID}&order=snapshot_date.asc`),
+      db(env, `/rest/v1/settlement_adjustments?select=*&user_id=eq.${env.PORTFOLIO_USER_ID}&order=adjusted_at.desc`),
     ]);
-    if (!transactionResponse.ok || !snapshotResponse.ok) return json({ error: '데이터를 읽지 못했습니다.' }, 502);
-    return json({ transactions: await transactionResponse.json(), snapshots: await snapshotResponse.json() });
+    if (!transactionResponse.ok || !snapshotResponse.ok || !adjustmentResponse.ok) return json({ error: '데이터를 읽지 못했습니다.' }, 502);
+    return json({ transactions: await transactionResponse.json(), snapshots: await snapshotResponse.json(), adjustments: await adjustmentResponse.json() });
+  }
+  if (url.pathname === '/api/settlement-adjustments' && request.method === 'POST') {
+    const input = await body(request);
+    const expected = Number(input?.expectedBalance), actual = Number(input?.actualBalance);
+    if (!Number.isFinite(expected) || !Number.isFinite(actual) || actual < 0 || !adjustmentReasons.has(input?.reason) || String(input?.memo || '').length > 500 || !input?.adjustedAt) return json({ error: '잔액 보정 입력값을 확인하세요.' }, 400);
+    const rows = await ledgerRows(env);
+    if (!rows) return json({ error: '현재 정산 잔액을 확인하지 못했습니다.' }, 502);
+    const current = settlementBalance(rows), amount = actual - current;
+    if (Math.abs(current - expected) > 0.005) return json({ error: '입력 중 잔액이 변경되었습니다. 새로고침 후 다시 확인하세요.', currentBalance: current }, 409);
+    if (Math.abs(amount) < 0.01) return json({ error: '보정할 차이가 없습니다.' }, 400);
+    const flow = contributionDelta(input.reason, amount);
+    if (flow) await snapshot(env, { action: 'cash-flow-boundary', cashFlow: flow, occurredAt: input.adjustedAt });
+    const response = await db(env, '/rest/v1/rpc/create_settlement_adjustment', { method: 'POST', body: JSON.stringify({ p_user_id: env.PORTFOLIO_USER_ID, p_expected_balance: expected, p_actual_balance: actual, p_adjusted_at: input.adjustedAt, p_reason: input.reason, p_memo: String(input.memo || '') }) });
+    if (response.status === 409 || response.status === 400) return json({ error: '입력 중 잔액이 변경되었습니다. 새로고침 후 다시 확인하세요.' }, 409);
+    if (!response.ok) return json({ error: '잔액 보정을 저장하지 못했습니다.' }, 502);
+    const saved = await response.json();
+    await snapshot(env, { action: 'rebuild', from: input.adjustedAt });
+    return json(saved, 201);
+  }
+  const adjustmentMatch = url.pathname.match(/^\/api\/settlement-adjustments\/([0-9a-f-]{36})\/reverse$/i);
+  if (adjustmentMatch && request.method === 'POST') {
+    const input = await body(request);
+    const response = await db(env, '/rest/v1/rpc/reverse_settlement_adjustment', { method: 'POST', body: JSON.stringify({ p_user_id: env.PORTFOLIO_USER_ID, p_adjustment_id: adjustmentMatch[1], p_adjusted_at: input?.adjustedAt || new Date().toISOString() }) });
+    if (response.status === 409 || response.status === 400) return json({ error: '이미 취소되었거나 취소할 수 없는 보정입니다.' }, 409);
+    if (!response.ok) return json({ error: '잔액 보정을 취소하지 못했습니다.' }, 502);
+    const saved = await response.json();
+    await snapshot(env, { action: 'rebuild', from: saved?.adjusted_at || input?.adjustedAt });
+    return json(saved, 201);
   }
   if (url.pathname === '/api/settings' && request.method === 'GET') {
     try { return json({ settings: await strategySettings(env) }); } catch (error) { return json({ error: error.message }, 502); }
