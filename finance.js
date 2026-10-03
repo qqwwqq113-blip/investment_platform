@@ -57,6 +57,13 @@ export function portfolioState(rows) {
   for (const row of ascending(rows)) {
     const amount = n(row.amount);
     const quantity = n(row.quantity);
+    if (row.trade_type === 'ADJUSTMENT') {
+      cash += n(row.adjustment_amount);
+      const contribution = n(row.contribution_delta);
+      if (contribution >= 0) deposits += contribution;
+      else withdrawals += -contribution;
+      continue;
+    }
     if (row.trade_type === 'DEPOSIT') {
       cash += amount;
       deposits += amount;

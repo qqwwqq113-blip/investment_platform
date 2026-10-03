@@ -8,9 +8,10 @@ const kstDate = (value: string | Date = new Date()) => new Intl.DateTimeFormat("
 }).format(new Date(value));
 
 type Transaction = { traded_at: string; ticker: string; trade_type: string; quantity: number; price: number; amount: number; fee: number };
+type Adjustment = { adjusted_at: string; adjustment_amount: number; contribution_delta: number };
 type Holding = { ticker: string; quantity: number; cost: number };
 
-function portfolioState(rows: Transaction[], throughDate?: string) {
+function portfolioState(rows: Transaction[], adjustments: Adjustment[] = [], throughDate?: string) {
   const holdings = new Map<string, Holding>();
   let cash = 0, deposits = 0, withdrawals = 0;
   const ordered = [...rows].sort((a, b) => String(a.traded_at).localeCompare(String(b.traded_at)));
@@ -34,6 +35,13 @@ function portfolioState(rows: Transaction[], throughDate?: string) {
       holding.quantity -= sold;
       holdings.set(row.ticker, holding);
     }
+  }
+  for (const row of adjustments) {
+    if (throughDate && kstDate(row.adjusted_at) > throughDate) continue;
+    cash += asNumber(row.adjustment_amount);
+    const contribution = asNumber(row.contribution_delta);
+    if (contribution >= 0) deposits += contribution;
+    else withdrawals += -contribution;
   }
   return { cash, netContributions: deposits - withdrawals, holdings: [...holdings.values()].filter(item => item.quantity > 1e-7) };
 }
@@ -88,9 +96,13 @@ Deno.serve(async request => {
     .eq("user_id", portfolioUserId).order("traded_at", { ascending: true });
   if (transactionError) return new Response(JSON.stringify({ error: "거래 내역을 읽지 못했습니다." }), { status: 502, headers: responseHeaders });
   const rows = (transactions || []) as Transaction[];
+  const { data: adjustmentData, error: adjustmentError } = await supabase.from("settlement_adjustments")
+    .select("adjusted_at,adjustment_amount,contribution_delta").eq("user_id", portfolioUserId).order("adjusted_at", { ascending: true });
+  if (adjustmentError) return new Response(JSON.stringify({ error: "잔액 보정 내역을 읽지 못했습니다." }), { status: 502, headers: responseHeaders });
+  const adjustments = (adjustmentData || []) as Adjustment[];
 
   if (input.action === "cash-flow-boundary") {
-    const state = portfolioState(rows);
+    const state = portfolioState(rows, adjustments);
     const prices = await currentPrices(url, serviceRole, state.holdings);
     const value = valuation(state, prices);
     const { error } = await supabase.from("valuation_events").insert({
@@ -113,7 +125,7 @@ Deno.serve(async request => {
     const histories = new Map<string, Map<string, number>>();
     await Promise.all(tickers.map(async ticker => histories.set(ticker, await priceHistory(ticker, fromDate))));
     const rebuilt = dates.map(date => {
-      const state = portfolioState(rows, date);
+      const state = portfolioState(rows, adjustments, date);
       const prices = new Map(state.holdings.map(item => [item.ticker, priceOn(histories.get(item.ticker) || new Map(), date) ?? item.cost / item.quantity]));
       const value = valuation(state, prices);
       return {
@@ -128,7 +140,7 @@ Deno.serve(async request => {
     return new Response(JSON.stringify({ ok: true, rebuilt: rebuilt.length, fromDate }), { headers: responseHeaders });
   }
 
-  const state = portfolioState(rows);
+  const state = portfolioState(rows, adjustments);
   const prices = await currentPrices(url, serviceRole, state.holdings);
   const value = valuation(state, prices);
   const snapshotDate = kstDate();

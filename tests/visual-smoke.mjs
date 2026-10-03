@@ -32,7 +32,7 @@ let postedTransaction = null;
 
 const server = createServer(async (request, response) => {
   if (request.url === '/api/session') { response.setHeader('content-type', 'application/json'); response.end(json({ authenticated: true })); return; }
-  if (request.url === '/api/data') { response.setHeader('content-type', 'application/json'); response.end(json({ transactions, snapshots })); return; }
+  if (request.url === '/api/data') { response.setHeader('content-type', 'application/json'); response.end(json({ transactions, snapshots, adjustments: [] })); return; }
   if (request.url === '/api/settings') { response.setHeader('content-type', 'application/json'); response.end(json({ settings })); return; }
   if (request.url === '/api/benchmark') { response.setHeader('content-type', 'application/json'); response.end(json({ basis: 'adjusted_close', points: benchmark })); return; }
   if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
@@ -69,6 +69,10 @@ try {
     await page.locator('[data-page="portfolio"]').click();
     await page.locator('.holding-detail').first().click();
     await page.locator('[data-page="transactions"]').click();
+    await page.locator('#open-adjustment').click();
+    await page.locator('#actual-balance').fill('24380');
+    assert.equal(await page.locator('#save-adjustment').isEnabled(), true, `${viewport.name}: adjustment preview`);
+    await page.locator('#close-adjustment').click();
     assert.deepEqual(await page.locator('#ticker option').allTextContents(), ['QLD', 'QQQ', 'SGOV'], `${viewport.name}: ticker choices`);
     assert.deepEqual(await page.locator('.trade-type').allTextContents(), ['매수', '매도'], `${viewport.name}: stock transactions only`);
     assert.equal(await page.locator('#fee').count(), 0, `${viewport.name}: fee input removed`);

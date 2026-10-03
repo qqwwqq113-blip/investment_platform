@@ -53,6 +53,16 @@ test('종목 이동 후 남은 금액을 내부 정산 잔액으로 유지한다
   assert.equal(settlementBalance(rows), 55);
 });
 
+test('잔액 보정은 현금과 원금 반영 방식을 구분한다', () => {
+  const state = portfolioState([
+    row('DEPOSIT', 'CASH', 0, 0, 1000),
+    { trade_type: 'ADJUSTMENT', traded_at: '2026-01-02T00:00:00Z', adjustment_amount: -5, contribution_delta: -5 },
+    { trade_type: 'ADJUSTMENT', traded_at: '2026-01-03T00:00:00Z', adjustment_amount: 2, contribution_delta: 0 },
+  ]);
+  assert.equal(state.cash, 997);
+  assert.equal(state.netContributions, 995);
+});
+
 test('계좌 손익은 순입금 원금과 비교한다', () => {
   const metrics = accountMetrics({ cash: 100, netContributions: 1000 }, [{ value: 1100 }]);
   assert.equal(metrics.equity, 1200);
