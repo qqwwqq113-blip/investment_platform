@@ -181,6 +181,7 @@ async function api(request, env, url) {
     if (!response.ok) return json({ error: '잔액 보정을 저장하지 못했습니다.' }, 502);
     const saved = await response.json();
     await snapshot(env, { action: 'rebuild', from: input.adjustedAt });
+    await snapshot(env);
     return json(saved, 201);
   }
   const adjustmentMatch = url.pathname.match(/^\/api\/settlement-adjustments\/([0-9a-f-]{36})\/reverse$/i);
@@ -191,6 +192,7 @@ async function api(request, env, url) {
     if (!response.ok) return json({ error: '잔액 보정을 취소하지 못했습니다.' }, 502);
     const saved = await response.json();
     await snapshot(env, { action: 'rebuild', from: saved?.adjusted_at || input?.adjustedAt });
+    await snapshot(env);
     return json(saved, 201);
   }
   if (url.pathname === '/api/settings' && request.method === 'GET') {
