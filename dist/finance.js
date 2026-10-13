@@ -168,19 +168,26 @@ export function nextContributionAdvice(allocation) {
   return { ticker: deficits[0].ticker, amount: deficits[0].difference };
 }
 
-export function twrFromSnapshots(snapshots) {
-  const rows = [...snapshots]
-    .filter(row => Number.isFinite(Number(row.twr_daily_return)))
+function exactTwrRows(snapshots) {
+  const ordered = [...snapshots]
+    .filter(row => row.snapshot_date)
     .sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+  const coverageStart = ordered.at(-1)?.twr_coverage_start || null;
+  return ordered.filter(row =>
+    (!coverageStart || String(row.snapshot_date) >= String(coverageStart)) &&
+    Number.isFinite(Number(row.twr_daily_return))
+  );
+}
+
+export function twrFromSnapshots(snapshots) {
+  const rows = exactTwrRows(snapshots);
   if (!rows.length) return { available: false, value: null, startDate: null, observations: 0 };
   const factor = rows.reduce((product, row) => product * (1 + Number(row.twr_daily_return)), 1);
   return { available: true, value: factor - 1, startDate: rows[0].snapshot_date, observations: rows.length };
 }
 
 export function maximumDrawdownFromReturns(snapshots) {
-  const rows = [...snapshots]
-    .filter(row => Number.isFinite(Number(row.twr_daily_return)))
-    .sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+  const rows = exactTwrRows(snapshots);
   if (!rows.length) return { available: false, value: null };
   let index = 1;
   let peak = 1;
@@ -322,9 +329,7 @@ export function currentQldCycleId(snapshots, currentWeight, threshold, currentDa
 }
 
 export function benchmarkComparison(snapshots, benchmarkPoints) {
-  const returns = [...snapshots]
-    .filter(row => row.snapshot_date && Number.isFinite(Number(row.twr_daily_return)))
-    .sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+  const returns = exactTwrRows(snapshots);
   let portfolioIndex = 1;
   const portfolio = new Map();
   for (const row of returns) {

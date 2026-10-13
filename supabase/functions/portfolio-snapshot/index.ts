@@ -149,7 +149,10 @@ Deno.serve(async request => {
     .lt("snapshot_date", snapshotDate).order("snapshot_date", { ascending: false }).limit(1).maybeSingle();
   let twrDailyReturn: number | null = null;
   let coverageStart = previous?.twr_coverage_start || snapshotDate;
-  if (previous?.total_equity) {
+  const previousDay = previous?.snapshot_date ? new Date(`${previous.snapshot_date}T00:00:00Z`) : null;
+  const currentDay = new Date(`${snapshotDate}T00:00:00Z`);
+  const isConsecutive = previousDay && currentDay.getTime() - previousDay.getTime() === 86400000;
+  if (previous?.total_equity && isConsecutive) {
     const { data: events } = await supabase.from("valuation_events").select("occurred_at,equity_before_flow,cash_flow")
       .eq("user_id", portfolioUserId).gt("occurred_at", previous.updated_at).lte("occurred_at", new Date().toISOString()).order("occurred_at", { ascending: true });
     let factor = 1, base = asNumber(previous.total_equity), exact = true;
@@ -159,6 +162,12 @@ Deno.serve(async request => {
       base = asNumber(event.equity_before_flow) + asNumber(event.cash_flow);
     }
     if (exact && base > 0) twrDailyReturn = factor * (value.totalEquity / base) - 1;
+  } else if (previous?.total_equity) {
+    // A missed snapshot makes the intervening cash-flow boundaries unknowable.
+    // Restart the exact TWR series at today's neutral baseline instead of
+    // reporting the whole gap as one day's market return.
+    twrDailyReturn = 0;
+    coverageStart = snapshotDate;
   }
   const { error: saveError } = await supabase.from("daily_snapshots").upsert({
     user_id: portfolioUserId, snapshot_date: snapshotDate, total_equity: value.totalEquity,

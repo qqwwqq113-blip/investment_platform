@@ -95,6 +95,23 @@ test('TWR 성과지수에서 MDD를 계산한다', () => {
   assert.ok(Math.abs(result.value + 0.2) < 1e-12);
 });
 
+test('스냅샷 중단 후에는 새 TWR 측정 구간만 사용한다', () => {
+  const snapshots = [
+    { snapshot_date: '2026-10-03', twr_daily_return: 0.02, twr_coverage_start: '2026-09-20' },
+    { snapshot_date: '2026-10-13', twr_daily_return: 0, twr_coverage_start: '2026-10-13' },
+    { snapshot_date: '2026-10-14', twr_daily_return: 0.01, twr_coverage_start: '2026-10-13' },
+  ];
+  const twr = twrFromSnapshots(snapshots);
+  const comparison = benchmarkComparison(snapshots, [
+    { date: '2026-10-03', value: 100 },
+    { date: '2026-10-13', value: 110 },
+    { date: '2026-10-14', value: 111 },
+  ]);
+  assert.equal(twr.startDate, '2026-10-13');
+  assert.ok(Math.abs(twr.value - 0.01) < 1e-12);
+  assert.deepEqual(comparison.points.map(point => point.date), ['2026-10-13', '2026-10-14']);
+});
+
 test('QQQ 트리거는 같은 사이클에서 한 번 결정되고 신고점에서 초기화된다', () => {
   const normal = qqqDrawdown([{ date: '1', close: 100 }, { date: '2', close: 90 }]);
   assert.equal(normal.stage, 0);
