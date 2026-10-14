@@ -76,6 +76,17 @@ function priceOn(history: Map<string, number>, date: string) {
   return latest;
 }
 
+function calendarDates(from: string, through: string) {
+  const dates: string[] = [];
+  const cursor = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${through}T00:00:00Z`);
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 function valuation(state: ReturnType<typeof portfolioState>, prices: Map<string, number>) {
   const holdings = state.holdings.map(item => ({ ticker: item.ticker, quantity: item.quantity, price: prices.get(item.ticker) ?? item.cost / item.quantity }));
   return { holdings, totalEquity: state.cash + holdings.reduce((sum, item) => sum + item.quantity * item.price, 0) };
@@ -138,6 +149,44 @@ Deno.serve(async request => {
     const { error } = await supabase.from("daily_snapshots").upsert(rebuilt, { onConflict: "user_id,snapshot_date" });
     if (error) return new Response(JSON.stringify({ error: "과거 평가 이력을 재구성하지 못했습니다." }), { status: 502, headers: responseHeaders });
     return new Response(JSON.stringify({ ok: true, rebuilt: rebuilt.length, fromDate }), { headers: responseHeaders });
+  }
+
+  if (input.action === "backfill-close") {
+    const fromDate = kstDate(input.from);
+    const throughDate = kstDate(input.through || new Date());
+    const dates = calendarDates(fromDate, throughDate);
+    if (!dates.length || fromDate > throughDate) {
+      return new Response(JSON.stringify({ error: "복원 기간을 확인하세요." }), { status: 400, headers: responseHeaders });
+    }
+    const tickers = [...new Set(rows.filter(row => ["BUY", "SELL"].includes(row.trade_type)).map(row => row.ticker))];
+    const histories = new Map<string, Map<string, number>>();
+    await Promise.all(tickers.map(async ticker => histories.set(ticker, await priceHistory(ticker, fromDate))));
+    const { data: previous } = await supabase.from("daily_snapshots")
+      .select("snapshot_date,total_equity,net_contributions,twr_coverage_start")
+      .eq("user_id", portfolioUserId).lt("snapshot_date", fromDate)
+      .order("snapshot_date", { ascending: false }).limit(1).maybeSingle();
+    let previousEquity = asNumber(previous?.total_equity);
+    let previousContributions = asNumber(previous?.net_contributions);
+    const coverageStart = previous?.twr_coverage_start || previous?.snapshot_date || fromDate;
+    const rebuilt = dates.map(date => {
+      const state = portfolioState(rows, adjustments, date);
+      const prices = new Map(state.holdings.map(item => [item.ticker, priceOn(histories.get(item.ticker) || new Map(), date) ?? item.cost / item.quantity]));
+      const value = valuation(state, prices);
+      const cashFlow = state.netContributions - previousContributions;
+      const adjustedBase = previousEquity + cashFlow;
+      const dailyReturn = adjustedBase > 0 ? value.totalEquity / adjustedBase - 1 : null;
+      previousEquity = value.totalEquity;
+      previousContributions = state.netContributions;
+      return {
+        user_id: portfolioUserId, snapshot_date: date, total_equity: value.totalEquity,
+        total_cost: state.netContributions, net_contributions: state.netContributions,
+        cash_balance: state.cash, holdings: value.holdings, twr_daily_return: dailyReturn,
+        twr_coverage_start: coverageStart, updated_at: new Date().toISOString(),
+      };
+    });
+    const { error } = await supabase.from("daily_snapshots").upsert(rebuilt, { onConflict: "user_id,snapshot_date" });
+    if (error) return new Response(JSON.stringify({ error: "종가 기준 평가 이력을 복원하지 못했습니다." }), { status: 502, headers: responseHeaders });
+    return new Response(JSON.stringify({ ok: true, rebuilt: rebuilt.length, fromDate, throughDate, method: "daily-close-cash-flow-adjusted" }), { headers: responseHeaders });
   }
 
   const state = portfolioState(rows, adjustments);
