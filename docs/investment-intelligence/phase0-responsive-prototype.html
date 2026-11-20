@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Investment Intelligence — Phase 0 Prototype</title>
+    <script>
+      (() => {
+        const saved = localStorage.getItem('phase0-theme') || 'system';
+        const dark = saved === 'dark' || (saved === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.dataset.preference = saved;
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f1f4f6;
+        --surface: #ffffff;
+        --surface-2: #e9f4ee;
+        --nav: #17354a;
+        --ink: #21384a;
+        --muted: #6f8292;
+        --border: #dce5e9;
+        --accent: #298a74;
+        --accent-soft: #dcefe9;
+        --warning: #bf872f;
+        --danger: #bc5e59;
+        --shadow: 0 14px 40px rgb(23 53 74 / 8%);
+        --radius: 18px;
+      }
+      [data-theme='dark'] {
+        color-scheme: dark;
+        --bg: #101a24;
+        --surface: #182735;
+        --surface-2: #203a3a;
+        --nav: #0c1721;
+        --ink: #e9f1f5;
+        --muted: #9eb1c0;
+        --border: #344454;
+        --accent: #67c9aa;
+        --accent-soft: #24493f;
+        --warning: #e0b15c;
+        --danger: #ef938c;
+        --shadow: 0 18px 48px rgb(0 0 0 / 24%);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; background: var(--bg); color: var(--ink); font: 14px/1.5 Inter, Pretendard, 'Noto Sans KR', system-ui, sans-serif; }
+      button, input, select { font: inherit; }
+      button, select, input { min-height: 44px; }
+      button { cursor: pointer; }
+      button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
+      .app { min-height: 100vh; }
+      .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 5; display: none; width: 248px; padding: 26px 18px; color: #eaf3f5; background: var(--nav); }
+      .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 30px; font-weight: 850; letter-spacing: .05em; }
+      .brandmark { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 12px; color: var(--nav); background: #d8eee7; }
+      .side-nav { display: grid; gap: 7px; }
+      .nav-button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0 14px; border: 1px solid transparent; border-radius: 12px; color: #bed0d9; background: transparent; text-align: left; }
+      .nav-button.active { color: #fff; border-color: #ffffff20; background: #ffffff14; }
+      .side-note { position: absolute; right: 18px; bottom: 24px; left: 18px; padding: 12px; border: 1px solid #ffffff20; border-radius: 12px; color: #bcd0d9; font-size: 12px; }
+      .content { width: min(100% - 26px, 1180px); margin: auto; padding: 18px 0 calc(92px + env(safe-area-inset-bottom)); }
+      .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+      .prototype-badge { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--warning) 44%, var(--border)); border-radius: 999px; color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); font-size: 11px; font-weight: 800; }
+      .theme-select { width: 112px; padding: 0 10px; border: 1px solid var(--border); border-radius: 11px; color: var(--ink); background: var(--surface); }
+      .page { display: none; }
+      .page.active { display: block; }
+      .head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+      .eyebrow { margin: 0 0 4px; color: var(--accent); font-size: 11px; font-weight: 850; letter-spacing: .1em; }
+      h1, h2, h3, p { margin-top: 0; }
+      h1 { margin-bottom: 4px; font-size: clamp(25px, 6vw, 38px); line-height: 1.15; letter-spacing: -.04em; }
+      h2 { margin-bottom: 4px; font-size: 18px; letter-spacing: -.02em; }
+      h3 { margin-bottom: 5px; font-size: 15px; }
+      .muted { color: var(--muted); }
+      .grid { display: grid; gap: 13px; }
+      .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card { min-width: 0; padding: 17px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+      .card-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 11px; font-weight: 750; }
+      .metric { display: block; font-size: clamp(21px, 7vw, 31px); line-height: 1.15; letter-spacing: -.045em; }
+      .placeholder { color: var(--muted); font-size: 13px; }
+      .status { display: inline-flex; margin-top: 9px; padding: 5px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-weight: 800; }
+      .primary { border: 1px solid color-mix(in srgb, var(--accent) 80%, var(--border)); color: #fff; background: #298a74; font-weight: 800; }
+      [data-theme='dark'] .primary { color: #10251e; background: var(--accent); }
+      .secondary { border: 1px solid var(--border); color: var(--ink); background: var(--surface); font-weight: 750; }
+      .wide { width: 100%; }
+      .quick-trade { margin: 14px 0; padding: 16px; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: linear-gradient(130deg, var(--surface), var(--surface-2)); }
+      .quick-trade button { margin-top: 11px; padding: 0 18px; border-radius: 12px; }
+      .section-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+      .asset-list, .transaction-list { display: grid; gap: 9px; }
+      .asset, .transaction { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; padding: 13px; border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--surface) 92%, var(--bg)); }
+      .asset strong, .transaction strong { font-size: 15px; }
+      .asset small, .transaction small { color: var(--muted); }
+      .amount { text-align: right; font-variant-numeric: tabular-nums; }
+      .trade-form { display: grid; gap: 13px; }
+      .trade-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .trade-switch button { border: 1px solid var(--border); border-radius: 12px; color: var(--muted); background: var(--surface); font-weight: 800; }
+      .trade-switch button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+      label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 750; }
+      input, select { width: 100%; padding: 0 12px; border: 1px solid var(--border); border-radius: 11px; color: var(--ink); background: var(--surface); }
+      .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+      .span-2 { grid-column: 1 / -1; }
+      .form-note { padding: 11px 13px; border-radius: 11px; color: var(--muted); background: var(--surface-2); font-size: 12px; }
+      .save-bar { position: sticky; bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 2; padding-top: 8px; background: linear-gradient(transparent, var(--bg) 35%); }
+      .save-bar button { border-radius: 13px; }
+      .bottom-nav { position: fixed; right: 0; bottom: 0; left: 0; z-index: 6; display: grid; grid-template-columns: repeat(5, 1fr); padding: 7px 6px calc(7px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(16px); }
+      .bottom-nav button { display: grid; min-width: 0; min-height: 52px; place-items: center; gap: 1px; padding: 4px 2px; border: 0; color: var(--muted); background: transparent; font-size: 17px; }
+      .bottom-nav button span { overflow: hidden; max-width: 100%; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+      .bottom-nav button.active { color: var(--accent); font-weight: 850; }
+      .toast { position: fixed; top: 74px; right: 16px; left: 16px; z-index: 20; display: none; padding: 13px 16px; border-radius: 13px; color: #fff; background: var(--nav); box-shadow: var(--shadow); text-align: center; }
+      .toast.show { display: block; }
+      @media (min-width: 720px) {
+        .content { padding-top: 26px; }
+        .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .two-col { grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); }
+        .form-grid { grid-template-columns: repeat(3, 1fr); }
+        .span-2 { grid-column: auto; }
+        .memo { grid-column: 1 / -1; }
+      }
+      @media (min-width: 1024px) {
+        .sidebar { display: block; }
+        .content { width: min(calc(100% - 300px), 1160px); margin-left: 276px; padding-bottom: 45px; }
+        .bottom-nav { display: none; }
+        .save-bar { bottom: 0; }
+        .toast { top: auto; right: 28px; bottom: 28px; left: auto; width: 340px; }
+      }
+      @media (max-width: 379px) {
+        .content { width: min(100% - 20px, 1180px); }
+        .card { padding: 14px; }
+        .form-grid { grid-template-columns: 1fr; }
+        .span-2 { grid-column: auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand"><span class="brandmark">◈</span><span>INVESTMENT<br />INTELLIGENCE</span></div>
+        <nav class="side-nav" aria-label="태블릿 및 PC 탐색">
+          <button class="nav-button active" data-page="home">▦ 통합 상황실</button>
+          <button class="nav-button" data-page="assets">◉ 자산관리</button>
+          <button class="nav-button" data-page="trade">＋ 거래 등록</button>
+          <button class="nav-button" data-page="history">↕ 거래 내역</button>
+          <button class="nav-button" data-page="settings">⚙ 설정</button>
+        </nav>
+        <div class="side-note"><b>PHASE 0 PROTOTYPE</b><br />실제 API 연결 없음<br />입력 내용 저장 안 함</div>
+      </aside>
+
+      <main class="content">
+        <div class="topbar">
+          <span class="prototype-badge">● PHASE 0 · 저장 안 함</span>
+          <select id="theme" class="theme-select" aria-label="화면 테마">
+            <option value="system">기기 설정</option>
+            <option value="light">라이트</option>
+            <option value="dark">다크</option>
+          </select>
+        </div>
+
+        <section id="page-home" class="page active">
+          <header class="head"><div><p class="eyebrow">YOUR FINANCIAL CONTROL TOWER</p><h1>통합 투자 상황실</h1><p class="muted">실제 데이터 연결 전의 레이아웃 시안입니다.</p></div></header>
+          <div class="grid kpis">
+            <article class="card"><span class="card-label">총 평가자산</span><strong class="metric">—</strong><span class="placeholder">실제 API 연결 시 표시</span></article>
+            <article class="card"><span class="card-label">평가손익</span><strong class="metric">—</strong><span class="placeholder">순입금 원금 기준</span></article>
+            <article class="card"><span class="card-label">기간수익률</span><strong class="metric">—</strong><span class="placeholder">TWR coverage 표시</span></article>
+            <article class="card"><span class="card-label">전략 상태</span><strong class="metric">—</strong><span class="status">기존 규칙 유지</span></article>
+          </div>
+          <article class="card quick-trade"><h2>거래를 기록하시겠어요?</h2><p class="muted">홈에서 한 번의 탭으로 모바일 거래 입력을 시작합니다.</p><button class="primary" data-link="trade">거래 등록</button></article>
+          <div class="grid two-col">
+            <article class="card"><div class="section-head"><div><h2>보유 자산</h2><span class="muted">실제 데이터 자리</span></div><button class="secondary" data-link="assets">전체 보기</button></div><div class="asset-list"><div class="asset"><div><strong>QLD</strong><br /><small>수량 · 평균단가 · 현재가</small></div><div class="amount"><strong>—</strong><br /><small>평가손익</small></div></div><div class="asset"><div><strong>QQQ</strong><br /><small>수량 · 평균단가 · 현재가</small></div><div class="amount"><strong>—</strong><br /><small>평가손익</small></div></div></div></article>
+            <article class="card"><h2>데이터 상태</h2><p class="muted">시세 기준시각, 마지막 성공 시각, 스냅샷 coverage와 오류 상태를 숨기지 않고 표시합니다.</p><span class="status">연결 전</span></article>
+          </div>
+        </section>
+
+        <section id="page-assets" class="page">
+          <header class="head"><div><p class="eyebrow">PORTFOLIO MANAGEMENT</p><h1>자산관리</h1><p class="muted">가로 표 없이 주요 값을 확인하는 모바일 카드 시안입니다.</p></div><button class="primary" data-link="trade">＋ 거래 등록</button></header>
+          <div class="grid kpis"><article class="card"><span class="card-label">평가자산</span><strong class="metric">—</strong></article><article class="card"><span class="card-label">내부 정산 잔액</span><strong class="metric">—</strong></article><article class="card"><span class="card-label">TWR</span><strong class="metric">—</strong></article><article class="card"><span class="card-label">MDD</span><strong class="metric">—</strong></article></div>
+          <article class="card" style="margin-top:13px"><div class="section-head"><div><h2>종목별 보유 현황</h2><span class="muted">현금 제외 투자자산 비중</span></div></div><div class="asset-list"><div class="asset"><div><strong>QLD</strong><br /><small>보유수량 — · 평균단가 —</small></div><div class="amount"><strong>—</strong><br /><small>현재 비중 —</small></div></div><div class="asset"><div><strong>QQQ</strong><br /><small>보유수량 — · 평균단가 —</small></div><div class="amount"><strong>—</strong><br /><small>현재 비중 —</small></div></div><div class="asset"><div><strong>SGOV</strong><br /><small>보유수량 — · 평균단가 —</small></div><div class="amount"><strong>—</strong><br /><small>현재 비중 —</small></div></div></div></article>
+        </section>
+
+        <section id="page-trade" class="page">
+          <header class="head"><div><p class="eyebrow">MOBILE FIRST TRANSACTION</p><h1>거래 등록</h1><p class="muted">단일 계좌 · USD · 수수료 0이라는 현재 정책을 유지합니다.</p></div></header>
+          <div class="grid two-col">
+            <article class="card">
+              <form id="trade-form" class="trade-form">
+                <div class="trade-switch" role="group" aria-label="거래 유형"><button class="active" type="button">매수</button><button type="button">매도</button></div>
+                <div class="form-grid">
+                  <label>종목<select><option>QLD</option><option>QQQ</option><option>SGOV</option></select></label>
+                  <label>거래일시<input type="datetime-local" value="2026-11-20T12:00" /></label>
+                  <label>수량<input inputmode="decimal" type="number" min="0" step="0.000001" placeholder="0" /></label>
+                  <label>단가 (USD)<input inputmode="decimal" type="number" min="0" step="0.01" placeholder="0.00" /></label>
+                  <label>매수 자금<select><option>신규자금</option><option>기존 매도대금</option></select></label>
+                  <label>거래 사유<select><option>선택 안 함</option><option>정기매수</option><option>QQQ 1차 Drawdown 대응</option><option>QQQ 2차 Drawdown 대응</option><option>QLD 85% 복귀</option><option>신규자금 배분</option></select></label>
+                  <label class="memo">메모<input maxlength="500" placeholder="선택 사항" /></label>
+                </div>
+                <div class="form-note">예상 거래금액과 실제 정산 잔액은 운영 API 연결 후 표시합니다. 시안에서는 저장되지 않습니다.</div>
+                <div class="save-bar"><button class="primary wide" type="submit">거래 저장 시안 확인</button></div>
+              </form>
+            </article>
+            <aside class="card"><h2>저장 전 확인</h2><p class="muted">보유수량 초과 매도, 0 이하 수량·단가, 정산 잔액 초과, 중복 제출을 차단합니다.</p><h3>내부 정산 잔액</h3><strong class="metric">—</strong><span class="placeholder">운영 데이터 연결 전</span></aside>
+          </div>
+        </section>
+
+        <section id="page-history" class="page"><header class="head"><div><p class="eyebrow">TRANSACTION JOURNAL</p><h1>거래 내역</h1><p class="muted">날짜·종목·유형 필터와 수정·삭제 흐름을 유지합니다.</p></div></header><article class="card"><div class="transaction-list"><div class="transaction"><div><strong>거래 데이터 자리</strong><br /><small>날짜 · 티커 · 매수/매도 · 수량 · 단가</small></div><div class="amount"><strong>—</strong><br /><small>수정 · 삭제</small></div></div></div></article></section>
+
+        <section id="page-settings" class="page"><header class="head"><div><p class="eyebrow">PREFERENCES</p><h1>설정</h1><p class="muted">투자전략 설정을 보존하고 화면 테마를 추가합니다.</p></div></header><div class="grid two-col"><article class="card"><h2>화면 테마</h2><p class="muted">상단 선택기에서 라이트·다크·기기 설정을 체험할 수 있습니다.</p></article><article class="card"><h2>투자전략</h2><p class="muted">QQQ 10% · QLD 70% · SGOV 20%, QQQ -20/-30%, QLD 85% 규칙의 의미는 변경하지 않습니다.</p></article></div></section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="모바일 탐색"><button class="active" data-page="home">⌂<span>홈</span></button><button data-page="assets">◉<span>자산</span></button><button data-page="trade">＋<span>거래 등록</span></button><button data-page="history">↕<span>거래 내역</span></button><button data-page="settings">•••<span>더보기</span></button></nav>
+      <div id="toast" class="toast" role="status" aria-live="polite">시안에서는 거래를 저장하지 않습니다.</div>
+    </div>
+    <script>
+      const system = matchMedia('(prefers-color-scheme: dark)');
+      const theme = document.querySelector('#theme');
+      const applyTheme = preference => {
+        const dark = preference === 'dark' || (preference === 'system' && system.matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.dataset.preference = preference;
+      };
+      theme.value = document.documentElement.dataset.preference || 'system';
+      theme.addEventListener('change', () => { localStorage.setItem('phase0-theme', theme.value); applyTheme(theme.value); });
+      system.addEventListener('change', () => { if (theme.value === 'system') applyTheme('system'); });
+
+      const go = name => {
+        document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === `page-${name}`));
+        document.querySelectorAll('[data-page]').forEach(button => button.classList.toggle('active', button.dataset.page === name));
+        scrollTo({ top: 0, behavior: 'instant' });
+      };
+      document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => go(button.dataset.page)));
+      document.querySelectorAll('[data-link]').forEach(button => button.addEventListener('click', () => go(button.dataset.link)));
+      document.querySelectorAll('.trade-switch button').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('.trade-switch button').forEach(item => item.classList.toggle('active', item === button));
+      }));
+      document.querySelector('#trade-form').addEventListener('submit', event => {
+        event.preventDefault();
+        const toast = document.querySelector('#toast');
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2600);
+      });
+    </script>
+  </body>
+</html>
