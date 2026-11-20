@@ -32,6 +32,7 @@ let cache = { rows: [], adjustments: [], snaps: [], holdings: [], state: null, a
 let quotes = {};
 let quotesFetchedAt = null;
 let editingId = null;
+let transactionSubmitting = false;
 let toastTimer = null;
 let sessionToken = new URLSearchParams(location.hash.slice(1)).get('session') || '';
 if (sessionToken) history.replaceState(null, '', location.pathname);
@@ -217,7 +218,7 @@ function renderPortfolio(holdings, rows, total) {
   $('holding-preview').innerHTML = holdings.slice(0, 3).map(item => holdingSummary(item, total)).join('') || '<p class="empty">보유 종목이 없습니다.</p>';
   $('holdings-cards').innerHTML = holdings.map(item => {
     const recent = rows.filter(row => row.ticker === item.ticker).slice(0, 5);
-    return `<details class="holding-detail"><summary>${holdingSummary(item, total)}<span class="detail-cue">상세 보기</span></summary><div class="holding-metrics"><div><span>평가액</span><strong>${usd.format(item.value)}</strong></div><div><span>보유수량</span><strong>${num.format(item.quantity)}주</strong></div><div><span>평균매입가</span><strong>${usd.format(item.averagePrice)}</strong></div><div><span>현재가격</span><strong>${item.currentPrice === null ? '—' : usd.format(item.currentPrice)}</strong></div><div><span>평가손익률</span><strong class="${item.unrealizedReturn >= 0 ? 'positive' : 'negative'}">${signed(item.unrealizedReturn)}</strong></div><div><span>포트폴리오 비중</span><strong>${(total ? item.value / total * 100 : 0).toFixed(1)}%</strong></div><div><span>총 매수금액</span><strong>${usd.format(item.totalBought)}</strong></div><div><span>실현손익</span><strong class="${item.realizedProfit >= 0 ? 'positive' : 'negative'}">${item.realizedProfit >= 0 ? '+' : ''}${usd.format(item.realizedProfit)}</strong></div></div><div class="ticker-transactions"><h3>${item.ticker} 최근 거래</h3>${recent.map(transactionLine).join('') || '<p class="empty small">거래가 없습니다.</p>'}<button class="ghost ticker-all" data-ticker-jump="${item.ticker}">전체 거래 보기</button></div></details>`;
+    return `<details class="holding-detail"><summary>${holdingSummary(item, total)}<span class="detail-cue">상세 보기</span></summary><div class="holding-actions" aria-label="${item.ticker} 빠른 거래"><button data-quick-trade="BUY" data-quick-ticker="${item.ticker}">${item.ticker} 매수</button><button class="ghost" data-quick-trade="SELL" data-quick-ticker="${item.ticker}">${item.ticker} 매도</button></div><div class="holding-metrics"><div><span>평가액</span><strong>${usd.format(item.value)}</strong></div><div><span>보유수량</span><strong>${num.format(item.quantity)}주</strong></div><div><span>평균매입가</span><strong>${usd.format(item.averagePrice)}</strong></div><div><span>현재가격</span><strong>${item.currentPrice === null ? '—' : usd.format(item.currentPrice)}</strong></div><div><span>평가손익률</span><strong class="${item.unrealizedReturn >= 0 ? 'positive' : 'negative'}">${signed(item.unrealizedReturn)}</strong></div><div><span>포트폴리오 비중</span><strong>${(total ? item.value / total * 100 : 0).toFixed(1)}%</strong></div><div><span>총 매수금액</span><strong>${usd.format(item.totalBought)}</strong></div><div><span>실현손익</span><strong class="${item.realizedProfit >= 0 ? 'positive' : 'negative'}">${item.realizedProfit >= 0 ? '+' : ''}${usd.format(item.realizedProfit)}</strong></div></div><div class="ticker-transactions"><h3>${item.ticker} 최근 거래</h3>${recent.map(transactionLine).join('') || '<p class="empty small">거래가 없습니다.</p>'}<button class="ghost ticker-all" data-ticker-jump="${item.ticker}">전체 거래 보기</button></div></details>`;
   }).join('') || '<p class="empty">보유 종목이 없습니다.</p>';
 }
 
@@ -393,14 +394,64 @@ function trade(type) {
   document.querySelectorAll('.trade-type').forEach(element => element.classList.toggle('active', element.dataset.type === type));
   document.querySelectorAll('.funding-field').forEach(element => element.classList.toggle('hidden', type !== 'BUY' || Boolean(editingId)));
   $('price-label').textContent = '단가';
+  updateTradePreview();
+}
+function availableTickerQuantity(ticker = $('ticker').value) {
+  const rows = editingId ? cache.rows.filter(item => item.id !== editingId) : cache.rows;
+  return portfolioState(rows).holdings.find(item => item.ticker === ticker)?.quantity || 0;
+}
+function setFieldError(inputId, errorId, message = '') {
+  const input = $(inputId), error = $(errorId);
+  input.setAttribute('aria-invalid', String(Boolean(message)));
+  error.textContent = message;
+}
+function updateTradePreview() {
+  if (!$('trade-preview-amount')) return;
+  const type = $('trade-type').value;
+  const quantity = Number($('quantity').value) || 0;
+  const price = Number($('price').value) || 0;
+  const amount = quantity * price;
+  const available = availableTickerQuantity();
+  $('trade-preview-amount').textContent = usd.format(amount);
+  $('ticker-availability').textContent = type === 'SELL' ? `매도 가능 ${num.format(available)}주` : `현재 보유 ${num.format(available)}주`;
+  $('trade-preview-detail').textContent = amount > 0
+    ? `${$('ticker').value} ${num.format(quantity)}주를 주당 ${usd.format(price)}에 ${tradeNames[type]}합니다.`
+    : '수량과 단가를 입력하세요.';
+}
+function validateTransactionFields() {
+  const type = $('trade-type').value;
+  const quantity = Number($('quantity').value), price = Number($('price').value);
+  const tradedAt = $('traded-at').value;
+  const available = availableTickerQuantity();
+  const dateMessage = tradedAt && Number.isFinite(new Date(`${tradedAt}:00+09:00`).getTime()) ? '' : '거래 일시를 입력하세요.';
+  const quantityMessage = !Number.isFinite(quantity) || quantity <= 0 ? '수량은 0보다 커야 합니다.'
+    : type === 'SELL' && quantity > available + 1e-7 ? `매도 가능 수량 ${num.format(available)}주를 초과했습니다.` : '';
+  const priceMessage = !Number.isFinite(price) || price <= 0 ? '단가는 0보다 커야 합니다.' : '';
+  let fundingMessage = '';
+  if (type === 'BUY' && !editingId && $('funding-source').value === 'SETTLEMENT') {
+    const rows = [...cache.rows, ...cache.adjustments.map(item => ({ ...item, trade_type: 'ADJUSTMENT', traded_at: item.adjusted_at }))];
+    const balance = portfolioState(rows).cash;
+    if (quantity * price > balance + 0.005) fundingMessage = `사용 가능한 정산 잔액 ${usd.format(Math.max(0, balance))}을 초과했습니다.`;
+  }
+  setFieldError('traded-at', 'traded-at-error', dateMessage);
+  setFieldError('quantity', 'quantity-error', quantityMessage);
+  setFieldError('price', 'price-error', priceMessage);
+  setFieldError('funding-source', 'funding-error', fundingMessage);
+  return !dateMessage && !quantityMessage && !priceMessage && !fundingMessage;
 }
 function resetForm() {
   editingId = null;
+  notice('', false);
   $('transaction-form').reset();
   document.querySelectorAll('.trade-type').forEach(element => { element.disabled = false; });
   $('traded-at').value = now();
   $('transaction-form-title').textContent = '거래 추가';
+  $('transaction-form-help').textContent = '종목과 수량, 단가를 입력하면 저장 전 예상 금액을 확인할 수 있습니다.';
+  $('editing-badge').classList.add('hidden');
+  $('transaction-submit').textContent = '거래 저장';
   $('cancel-edit').classList.add('hidden');
+  ['traded-at', 'quantity', 'price', 'funding-source'].forEach(id => $(id).removeAttribute('aria-invalid'));
+  ['traded-at-error', 'quantity-error', 'price-error', 'funding-error'].forEach(id => { $(id).textContent = ''; });
   trade('BUY');
 }
 function startEdit(id) {
@@ -409,6 +460,9 @@ function startEdit(id) {
   editingId = id;
   page('transactions');
   $('transaction-form-title').textContent = '거래 수정';
+  $('transaction-form-help').textContent = `${row.ticker} ${tradeNames[row.trade_type]} 기록을 수정하고 있습니다.`;
+  $('editing-badge').classList.remove('hidden');
+  $('transaction-submit').textContent = '수정 내용 저장';
   $('cancel-edit').classList.remove('hidden');
   trade(row.trade_type);
   document.querySelectorAll('.trade-type').forEach(element => { element.disabled = true; });
@@ -418,6 +472,7 @@ function startEdit(id) {
   $('price').value = row.price;
   $('reason').value = row.reason || '';
   $('memo').value = row.memo || '';
+  updateTradePreview();
   $('transaction-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function showAuth() { $('auth-card').classList.remove('hidden'); $('dashboard').classList.add('hidden'); $('sign-out').classList.add('hidden'); $('password').focus(); }
@@ -449,6 +504,7 @@ $('auth-form').onsubmit = null;
 $('sign-out').onclick = async () => { await api('/api/session', { method: 'DELETE' }); sessionToken = ''; showAuth(); };
 document.querySelectorAll('[data-page],[data-page-link]').forEach(element => { element.onclick = () => page(element.dataset.page || element.dataset.pageLink); });
 document.querySelector('[data-action="new-transaction"]').onclick = () => {
+  resetForm();
   page('transactions');
   $('transaction-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
   setTimeout(() => $('ticker').focus(), 250);
@@ -457,6 +513,11 @@ $('theme-preference').onchange = event => applyTheme(event.target.value, true);
 document.querySelectorAll('[data-range]').forEach(element => { element.onclick = () => { range = element.dataset.range; document.querySelectorAll('[data-range]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); renderAllocationHistory(cache.snaps); }; });
 document.querySelectorAll('[data-performance-view]').forEach(element => { element.onclick = () => { performanceView = element.dataset.performanceView; document.querySelectorAll('[data-performance-view]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); }; });
 document.querySelectorAll('.trade-type').forEach(element => { element.onclick = () => trade(element.dataset.type); });
+$('ticker').onchange = () => { updateTradePreview(); if ($('quantity').getAttribute('aria-invalid') === 'true') validateTransactionFields(); };
+$('traded-at').onchange = () => { if ($('traded-at').getAttribute('aria-invalid') === 'true') validateTransactionFields(); };
+$('quantity').oninput = () => { updateTradePreview(); if ($('quantity').getAttribute('aria-invalid') === 'true') validateTransactionFields(); };
+$('price').oninput = () => { updateTradePreview(); if ($('price').getAttribute('aria-invalid') === 'true') validateTransactionFields(); };
+$('funding-source').onchange = () => { updateTradePreview(); if ($('funding-source').getAttribute('aria-invalid') === 'true') validateTransactionFields(); };
 $('refresh').onclick = load;
 $('cancel-edit').onclick = resetForm;
 $('open-adjustment').onclick = () => {
@@ -510,6 +571,13 @@ $('target-form').onsubmit = async event => {
 };
 $('transaction-form').onsubmit = async event => {
   event.preventDefault();
+  if (transactionSubmitting) return;
+  if (!validateTransactionFields()) {
+    notice('입력값을 확인한 뒤 다시 저장해 주세요.', true);
+    $('transaction-form').querySelector('[aria-invalid="true"]')?.focus();
+    return;
+  }
+  notice('', false);
   const type = $('trade-type').value, quantity = Number($('quantity').value), price = Number($('price').value);
   const wasEditing = Boolean(editingId);
   const reason = $('reason').value || null;
@@ -525,7 +593,9 @@ $('transaction-form').onsubmit = async event => {
     return;
   }
   const submitButton = $('transaction-form').querySelector('button[type="submit"]');
+  transactionSubmitting = true;
   submitButton.disabled = true;
+  submitButton.textContent = wasEditing ? '수정 저장 중…' : '거래 저장 중…';
   try {
     const response = await api(editingId ? `/api/transactions/${encodeURIComponent(editingId)}` : '/api/transactions', { method: editingId ? 'PATCH' : 'POST', body: row });
     if (response.error) { notice(`${wasEditing ? '수정' : '저장'}하지 못했습니다: ${response.error.message}`, true); return; }
@@ -533,7 +603,9 @@ $('transaction-form').onsubmit = async event => {
     await load();
     toast(`${tradeNames[type]} 거래 ${wasEditing ? '수정' : '입력'}이 완료되었습니다.`);
   } finally {
+    transactionSubmitting = false;
     submitButton.disabled = false;
+    submitButton.textContent = editingId ? '수정 내용 저장' : '거래 저장';
   }
 };
 $('transactions-list').onclick = event => {
@@ -542,16 +614,34 @@ $('transactions-list').onclick = event => {
   if (event.target.dataset.edit) { startEdit(event.target.dataset.edit); return; }
   if (event.target.dataset.delete) {
     const id = event.target.dataset.delete, dialog = $('delete-dialog');
+    const row = cache.rows.find(item => item.id === id);
+    if (!row) return;
+    $('delete-transaction-summary').innerHTML = `<strong>${row.ticker} ${tradeNames[row.trade_type]}</strong><span>${new Date(row.traded_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</span><b>${num.format(row.quantity)}주 · ${usd.format(Number(row.amount))}</b>`;
     dialog.showModal();
     dialog.onclose = async () => {
       if (dialog.returnValue !== 'confirm') return;
+      const deleteButton = dialog.querySelector('[value="confirm"]');
+      deleteButton.disabled = true;
+      deleteButton.textContent = '삭제 중…';
       const response = await api(`/api/transactions/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (response.error) notice(`삭제하지 못했습니다: ${response.error.message}`, true);
       else { notice('거래를 삭제했습니다.'); await load(); }
+      deleteButton.disabled = false;
+      deleteButton.textContent = '삭제';
     };
   }
 };
 $('holdings-cards').onclick = event => {
+  const quickType = event.target.dataset.quickTrade;
+  if (quickType) {
+    resetForm();
+    $('ticker').value = event.target.dataset.quickTicker;
+    trade(quickType);
+    page('transactions');
+    $('transaction-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => $('quantity').focus(), 250);
+    return;
+  }
   const ticker = event.target.dataset.tickerJump;
   if (!ticker) return;
   page('transactions');

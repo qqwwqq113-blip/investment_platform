@@ -9,7 +9,9 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('C:/Users/glory/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const dist = resolve(import.meta.dirname, '../dist');
 const phase1aScreenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase1a');
+const phase1bScreenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase1b');
 await mkdir(phase1aScreenshots, { recursive: true });
+await mkdir(phase1bScreenshots, { recursive: true });
 const transactions = [
   { id: '11111111-1111-4111-8111-111111111111', traded_at: '2026-09-17T05:00:00Z', ticker: 'QLD', trade_type: 'BUY', quantity: 5, price: 87, amount: 435, fee: 1, memo: '' },
   { id: '22222222-2222-4222-8222-222222222222', traded_at: '2026-09-16T05:00:00Z', ticker: 'QQQ', trade_type: 'BUY', quantity: 2, price: 590, amount: 1180, fee: 1, memo: '' },
@@ -31,6 +33,9 @@ const benchmark = snapshots.filter(item => item.twr_daily_return !== null).map((
 const json = value => Buffer.from(JSON.stringify(value));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 let postedTransaction = null;
+let postRequestCount = 0;
+let patchedTransaction = null;
+let deletedTransactionId = null;
 
 const server = createServer(async (request, response) => {
   if (request.url === '/api/session') { response.setHeader('content-type', 'application/json'); response.end(json({ authenticated: true })); return; }
@@ -40,10 +45,22 @@ const server = createServer(async (request, response) => {
   if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
   if (request.url === '/api/quotes') { response.setHeader('content-type', 'application/json'); response.end(json({ fetchedAt: new Date().toISOString(), quotes: [{ ticker: 'QQQ', price: 600 }, { ticker: 'QLD', price: 91 }, { ticker: 'SGOV', price: 100.5 }] })); return; }
   if (request.url === '/api/transactions' && request.method === 'POST') {
+    postRequestCount += 1;
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     postedTransaction = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     response.setHeader('content-type', 'application/json'); response.statusCode = 201; response.end(json({ id: '55555555-5555-4555-8555-555555555555' })); return;
+  }
+  const transactionMatch = request.url.match(/^\/api\/transactions\/([0-9a-f-]{36})$/i);
+  if (transactionMatch && request.method === 'PATCH') {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    patchedTransaction = { id: transactionMatch[1], ...JSON.parse(Buffer.concat(chunks).toString('utf8')) };
+    response.setHeader('content-type', 'application/json'); response.end(json(patchedTransaction)); return;
+  }
+  if (transactionMatch && request.method === 'DELETE') {
+    deletedTransactionId = transactionMatch[1];
+    response.statusCode = 204; response.end(); return;
   }
   const path = request.url === '/' ? join(dist, 'index.html') : join(dist, request.url.replace(/^\//, ''));
   try { response.setHeader('content-type', types[extname(path)] || 'application/octet-stream'); response.end(await readFile(path)); } catch { response.statusCode = 404; response.end('not found'); }
@@ -68,6 +85,11 @@ try {
     assert.equal(await page.locator('#cash-weight').count(), 0, `${viewport.name}: cash metric removed`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `${viewport.name}: horizontal overflow`);
     await page.screenshot({ path: join(phase1aScreenshots, `${viewport.name}-${viewport.theme}-home.png`), fullPage: true });
+    if (viewport.name === 'mobile-390') {
+      await page.locator('[data-action="new-transaction"]').click();
+      assert.equal(await page.locator('#page-transactions').getAttribute('class'), 'page active', 'mobile: one-tap trade entry');
+      await page.locator('[data-page="home"]').click();
+    }
     await page.locator('[data-performance-view="benchmark"]').click();
     await page.locator('#benchmark-chart svg').waitFor();
     await page.screenshot({ path: join(tmpdir(), `portfolio-benchmark-${viewport.name}.png`), fullPage: true });
@@ -85,6 +107,21 @@ try {
     assert.deepEqual(await page.locator('.trade-type').allTextContents(), ['매수', '매도'], `${viewport.name}: stock transactions only`);
     assert.equal(await page.locator('#fee').count(), 0, `${viewport.name}: fee input removed`);
     assert.equal(await page.locator('#funding-source').inputValue(), 'NEW_CAPITAL', `${viewport.name}: new capital default`);
+    if (viewport.name === 'mobile-360') {
+      await page.locator('#quantity').fill('0');
+      await page.locator('#price').fill('0');
+      await page.locator('#transaction-submit').click();
+      assert.equal(await page.locator('#quantity').getAttribute('aria-invalid'), 'true', 'mobile: quantity field error');
+      assert.match(await page.locator('#quantity-error').textContent(), /0보다 커야/);
+      await page.locator('[data-page="portfolio"]').click();
+      await page.locator('.holding-detail').first().click();
+      const quickTicker = await page.locator('[data-quick-trade="SELL"]').first().getAttribute('data-quick-ticker');
+      await page.locator('[data-quick-trade="SELL"]').first().click();
+      assert.equal(await page.locator('#trade-type').inputValue(), 'SELL', 'mobile: holding quick sell');
+      assert.equal(await page.locator('#ticker').inputValue(), quickTicker, 'mobile: quick trade ticker');
+      assert.match(await page.locator('#ticker-availability').textContent(), /매도 가능/);
+      await page.screenshot({ path: join(phase1bScreenshots, 'mobile-360-light-trade-ticket.png'), fullPage: true });
+    }
     if (viewport.name === 'desktop') {
       await page.locator('[data-page="settings"]').click();
       await page.locator('#theme-preference').selectOption('dark');
@@ -95,14 +132,33 @@ try {
       await page.locator('#ticker').selectOption('QQQ');
       await page.locator('#quantity').fill('1');
       await page.locator('#price').fill('600');
-      await page.locator('#transaction-form button[type="submit"]').click();
+      await page.locator('#transaction-form button[type="submit"]').evaluate(button => { button.click(); button.click(); });
       await page.locator('#toast.visible').waitFor();
       assert.equal(await page.locator('#toast').textContent(), '매수 거래 입력이 완료되었습니다.');
+      assert.equal(postRequestCount, 1, 'desktop: duplicate submit guarded');
       assert.equal(postedTransaction.funding_source, 'NEW_CAPITAL');
       assert.equal(postedTransaction.fee, 0);
     }
     await page.locator('.more-button').first().click();
     assert.equal(await page.locator('.row-menu.open').count(), 1, `${viewport.name}: transaction menu`);
+    if (viewport.name === 'mobile-360') {
+      await page.locator('.row-menu.open [data-edit]').click();
+      await page.locator('#quantity').fill('4');
+      await page.locator('#price').fill('88');
+      await page.locator('#transaction-submit').click();
+      await page.locator('#toast.visible').waitFor();
+      assert.equal(patchedTransaction.id, transactions[0].id, 'mobile: edited transaction id');
+      assert.equal(patchedTransaction.quantity, 4, 'mobile: edited transaction quantity');
+      await page.locator('.more-button').nth(1).click();
+      await page.locator('.row-menu.open [data-delete]').click();
+      assert.match(await page.locator('#delete-transaction-summary').textContent(), /QQQ 매수/);
+      await page.screenshot({ path: join(phase1bScreenshots, 'mobile-360-light-delete-confirmation.png'), fullPage: true });
+      const deleteResponse = page.waitForResponse(response => response.url().includes(`/api/transactions/${transactions[1].id}`) && response.request().method() === 'DELETE');
+      await page.locator('#delete-dialog [value="confirm"]').click();
+      await page.locator('#delete-dialog').waitFor({ state: 'hidden' });
+      await deleteResponse;
+      assert.equal(deletedTransactionId, transactions[1].id, 'mobile: deleted transaction id');
+    }
     await page.screenshot({ path: join(tmpdir(), `portfolio-transactions-${viewport.name}.png`), fullPage: true });
     assert.deepEqual(errors, [], `${viewport.name}: browser errors`);
     await page.close();

@@ -203,6 +203,8 @@ th { color: var(--muted); font-size: .8rem; }
 .detail-cue { position: absolute; top: 50%; right: 4px; color: var(--accent-strong); font-size: .8rem; transform: translateY(-50%); }
 .holding-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 4px 0 16px; }
 .holding-metrics strong { color: var(--ink-strong); font-size: .95rem; }
+.holding-actions { display: flex; gap: 8px; padding: 2px 0 14px; }
+.holding-actions button { flex: 1; }
 .ticker-transactions { padding: 0 0 18px; }
 .ticker-transactions h3 { margin: 8px 0; }
 .ticker-all { margin-top: 10px; }
@@ -219,6 +221,15 @@ label { display: grid; gap: 6px; color: var(--muted); font-size: .88rem; }
 .form-actions { display: flex; gap: 8px; }
 .form-actions button { flex: 1; }
 .funding-field small { color: var(--muted-2); font-size: .78rem; line-height: 1.4; }
+.field-help { color: var(--muted-2); font-size: .78rem; line-height: 1.4; }
+.field-error { min-height: 0; color: var(--danger) !important; font-size: .78rem; line-height: 1.4; }
+.field-error:empty { display: none; }
+input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); }
+.trade-preview { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.trade-preview div { display: grid; gap: 3px; }
+.trade-preview span, .trade-preview p { color: var(--muted); font-size: .82rem; }
+.trade-preview strong { color: var(--ink-strong); font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.trade-preview p { margin: 0; text-align: right; }
 .transaction-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
 .row-actions { position: relative; text-align: right; }
 .more-button { width: 38px; min-height: 38px; padding: 0; color: var(--ink); background: transparent; border-color: transparent; }
@@ -253,6 +264,9 @@ label { display: grid; gap: 6px; color: var(--muted); font-size: .88rem; }
 .modal::backdrop { background: rgb(6 14 21 / 68%); backdrop-filter: blur(3px); }
 .modal p { color: var(--muted); line-height: 1.6; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.delete-transaction-summary { display: grid; gap: 5px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.delete-transaction-summary strong, .delete-transaction-summary b { color: var(--ink-strong); }
+.delete-transaction-summary span { color: var(--muted); font-size: .84rem; }
 .danger { color: #fff; background: var(--danger); border-color: var(--danger); }
 .adjustment-modal form { display: grid; gap: 13px; }
 .balance-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -314,6 +328,7 @@ label { display: grid; gap: 6px; color: var(--muted); font-size: .88rem; }
   .detail-cue { display: none; }
   .settlement-card .section-heading { flex-direction: column; }
   .settlement-card .section-heading button { width: 100%; }
+  .transaction-submit-bar { position: sticky; bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 6; margin: 2px -16px -16px; padding: 12px 16px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 -8px 24px rgb(15 35 50 / 8%); backdrop-filter: blur(14px); }
   .adjustment-row { grid-template-columns: 1fr auto; }
   .adjustment-row span, .adjustment-row small { grid-column: 1 / -1; }
 }
@@ -330,6 +345,8 @@ label { display: grid; gap: 6px; color: var(--muted); font-size: .88rem; }
   .compact-button { padding: 0 10px; }
   .transaction-form { grid-template-columns: 1fr; }
   .trade-types, .wide { grid-column: auto; }
+  .trade-preview { display: grid; gap: 8px; }
+  .trade-preview p { text-align: left; }
   .settlement-summary, .balance-compare { grid-template-columns: 1fr; }
   .target-form label { align-items: flex-start; gap: 8px; }
   .toast { top: 12px; right: 16px; left: 16px; max-width: none; }
