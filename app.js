@@ -22,7 +22,7 @@ import {
 const $ = id => document.getElementById(id);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const num = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
-const colors = { QQQ: '#64a4ff', QLD: '#f5a524', SGOV: '#44c18a', CASH: '#8fa3b8' };
+const colors = { QQQ: 'var(--asset-qqq)', QLD: 'var(--asset-qld)', SGOV: 'var(--asset-sgov)', CASH: 'var(--asset-cash)' };
 const tradeNames = { BUY: '매수', SELL: '매도', DEPOSIT: '입금', WITHDRAW: '출금' };
 const reasonNames = { REGULAR_BUY: '정기매수', QQQ_DRAWDOWN_1: 'QQQ 1차 대응', QQQ_DRAWDOWN_2: 'QQQ 2차 대응', QLD_REBALANCE: 'QLD 복귀', NEW_CAPITAL: '신규자금', OTHER: '기타' };
 const adjustmentReasonNames = { FEES_FX: '수수료·환전 차이', MISSING_FLOW: '누락된 입금·출금', DIVIDEND_INTEREST: '배당·이자', EXECUTION_ROUNDING: '체결·반올림 차이', OTHER: '기타 원장 보정' };
@@ -35,6 +35,23 @@ let editingId = null;
 let toastTimer = null;
 let sessionToken = new URLSearchParams(location.hash.slice(1)).get('session') || '';
 if (sessionToken) history.replaceState(null, '', location.pathname);
+
+const themeMedia = matchMedia('(prefers-color-scheme: dark)');
+const themeKey = 'portfolio_theme_preference';
+function applyTheme(preference, persist = false) {
+  const normalized = ['light', 'dark', 'system'].includes(preference) ? preference : 'system';
+  const resolved = normalized === 'system' ? (themeMedia.matches ? 'dark' : 'light') : normalized;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = normalized;
+  document.querySelector('meta[name="theme-color"]').content = resolved === 'dark' ? '#101a24' : '#f1f4f6';
+  if ($('theme-preference')) $('theme-preference').value = normalized;
+  if ($('theme-status')) $('theme-status').textContent = normalized === 'system' ? `현재 기기 설정: ${resolved === 'dark' ? '다크' : '라이트'}` : `${resolved === 'dark' ? '다크' : '라이트'} 테마를 사용 중입니다.`;
+  if (persist) localStorage.setItem(themeKey, normalized);
+}
+applyTheme(localStorage.getItem(themeKey) || document.documentElement.dataset.themePreference || 'system');
+themeMedia.addEventListener('change', () => {
+  if ((localStorage.getItem(themeKey) || 'system') === 'system') applyTheme('system');
+});
 
 function api(path, { method = 'GET', body } = {}) {
   return new Promise(resolve => {
@@ -98,7 +115,7 @@ function donut(id, items, label, centerText) {
     at += item.value / total * 100;
     return `${colors[item.ticker] || '#7f8ea3'} ${start.toFixed(2)}% ${at.toFixed(2)}%`;
   }).join(', ');
-  $(id).innerHTML = `<div class="donut" style="background:conic-gradient(${stops})"><div><strong>${label}</strong><span>${centerText}</span></div></div><ul class="legend">${visible.map(item => `<li><i style="background:${colors[item.ticker] || '#7f8ea3'}"></i><span>${item.ticker}</span><b>${(item.value / total * 100).toFixed(1)}%</b></li>`).join('')}</ul>`;
+  $(id).innerHTML = `<div class="donut" style="background:conic-gradient(${stops})"><div><strong>${label}</strong><span>${centerText}</span></div></div><ul class="legend">${visible.map(item => `<li><i style="background:${colors[item.ticker] || 'var(--muted)'}"></i><span>${item.ticker}</span><b>${(item.value / total * 100).toFixed(1)}%</b></li>`).join('')}</ul>`;
 }
 
 function attachTooltip(chart, points, markup) {
@@ -136,7 +153,7 @@ function renderPerformance(snaps) {
   const path = key => points.map((point, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(1)} ${y(Number(key(point))).toFixed(1)}`).join(' ');
   const equityValue = point => point.total_equity;
   const principalValue = point => point.net_contributions ?? point.total_cost;
-  chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${path(equityValue)}" fill="none" stroke="#64a4ff" stroke-width="3"/><path d="${path(principalValue)}" fill="none" stroke="#f5a524" stroke-width="2.5" stroke-dasharray="7 5"/>${points.map((point, index) => `<circle cx="${x(index)}" cy="${y(Number(point.total_equity))}" r="${index === points.length - 1 ? 4.5 : 2.3}" fill="#cfe4ff"/>`).join('')}</svg>`;
+  chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${path(equityValue)}" fill="none" stroke="var(--chart-equity)" stroke-width="3"/><path d="${path(principalValue)}" fill="none" stroke="var(--chart-cost)" stroke-width="2.5" stroke-dasharray="7 5"/>${points.map((point, index) => `<circle cx="${x(index)}" cy="${y(Number(point.total_equity))}" r="${index === points.length - 1 ? 4.5 : 2.3}" fill="var(--chart-point)"/>`).join('')}</svg>`;
   attachTooltip(chart, points, point => {
     const principal = Number(point.net_contributions ?? point.total_cost);
     const profit = Number(point.total_equity) - principal;
@@ -165,7 +182,7 @@ function renderBenchmark() {
   const x = index => points.length === 1 ? w / 2 : 26 + index * (w - 52) / (points.length - 1);
   const y = value => 18 + (hi + pad - value) * (h - 50) / (hi + pad - (lo - pad));
   const path = key => points.map((point, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(1)} ${y(point[key]).toFixed(1)}`).join(' ');
-  chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${path('portfolio')}" fill="none" stroke="#64a4ff" stroke-width="3"/><path d="${path('benchmark')}" fill="none" stroke="#c28cff" stroke-width="2.5"/></svg>`;
+  chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${path('portfolio')}" fill="none" stroke="var(--chart-equity)" stroke-width="3"/><path d="${path('benchmark')}" fill="none" stroke="var(--chart-benchmark)" stroke-width="2.5"/></svg>`;
   attachTooltip(chart, points, point => `<b>${point.date}</b><div>Portfolio <b>${point.portfolio.toFixed(1)} (${signed(point.portfolio / 100 - 1)})</b></div><div>${basisLabel} <b>${point.benchmark.toFixed(1)} (${signed(point.benchmark / 100 - 1)})</b></div><div>초과성과 <b>${signed(point.excess)}</b></div>`);
 }
 
@@ -186,7 +203,7 @@ function renderAllocationHistory(snaps) {
     const bottom = [...weights].reverse().map((row, reverseIndex) => { const i = weights.length - 1 - reverseIndex; return [x(i), h - 12 - tickers.slice(0, index).reduce((sum, key) => sum + row[key], 0) / 100 * (h - 24)]; });
     return `M ${top.map(pair => pair.join(' ')).join(' L ')} L ${bottom.map(pair => pair.join(' ')).join(' L ')} Z`;
   };
-  chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${tickers.map(ticker => `<path d="${area(ticker)}" fill="${colors[ticker]}" fill-opacity=".78" stroke="#08111f"/>`).join('')}</svg>`;
+  chart.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${tickers.map(ticker => `<path d="${area(ticker)}" fill="${colors[ticker]}" fill-opacity=".78" stroke="var(--chart-separator)"/>`).join('')}</svg>`;
   attachTooltip(chart, points.map((snapshot, index) => ({ snapshot, weight: weights[index] })), item => `<b>${item.snapshot.snapshot_date}</b>${tickers.map(ticker => `<div>${ticker} <b>${item.weight[ticker].toFixed(1)}%</b></div>`).join('')}`);
   const last = weights.at(-1);
   $('allocation-history-summary').textContent = `${points.at(-1).snapshot_date} 기준 · ${tickers.map(ticker => `${ticker} ${last[ticker].toFixed(1)}%`).join(' · ')}`;
@@ -431,6 +448,12 @@ $('traded-at').value = now();
 $('auth-form').onsubmit = null;
 $('sign-out').onclick = async () => { await api('/api/session', { method: 'DELETE' }); sessionToken = ''; showAuth(); };
 document.querySelectorAll('[data-page],[data-page-link]').forEach(element => { element.onclick = () => page(element.dataset.page || element.dataset.pageLink); });
+document.querySelector('[data-action="new-transaction"]').onclick = () => {
+  page('transactions');
+  $('transaction-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setTimeout(() => $('ticker').focus(), 250);
+};
+$('theme-preference').onchange = event => applyTheme(event.target.value, true);
 document.querySelectorAll('[data-range]').forEach(element => { element.onclick = () => { range = element.dataset.range; document.querySelectorAll('[data-range]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); renderAllocationHistory(cache.snaps); }; });
 document.querySelectorAll('[data-performance-view]').forEach(element => { element.onclick = () => { performanceView = element.dataset.performanceView; document.querySelectorAll('[data-performance-view]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); }; });
 document.querySelectorAll('.trade-type').forEach(element => { element.onclick = () => trade(element.dataset.type); });

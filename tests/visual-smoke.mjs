@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
 const { chromium } = require('C:/Users/glory/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const dist = resolve(import.meta.dirname, '../dist');
+const phase1aScreenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase1a');
+await mkdir(phase1aScreenshots, { recursive: true });
 const transactions = [
   { id: '11111111-1111-4111-8111-111111111111', traded_at: '2026-09-17T05:00:00Z', ticker: 'QLD', trade_type: 'BUY', quantity: 5, price: 87, amount: 435, fee: 1, memo: '' },
   { id: '22222222-2222-4222-8222-222222222222', traded_at: '2026-09-16T05:00:00Z', ticker: 'QQQ', trade_type: 'BUY', quantity: 2, price: 590, amount: 1180, fee: 1, memo: '' },
@@ -50,16 +52,22 @@ await new Promise(resolvePromise => server.listen(0, '127.0.0.1', resolvePromise
 const port = server.address().port;
 const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
 try {
-  for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'tablet-landscape', width: 1024, height: 768 }, { name: 'tablet-portrait', width: 768, height: 1024 }, { name: 'mobile', width: 390, height: 844 }]) {
+  for (const viewport of [{ name: 'desktop', width: 1440, height: 900, theme: 'light' }, { name: 'tablet-landscape', width: 1024, height: 768, theme: 'dark' }, { name: 'tablet-portrait', width: 768, height: 1024, theme: 'light' }, { name: 'mobile-390', width: 390, height: 844, theme: 'dark' }, { name: 'mobile-360', width: 360, height: 800, theme: 'light' }]) {
     const page = await browser.newPage({ viewport });
+    await page.addInitScript(theme => {
+      if (!localStorage.getItem('portfolio_theme_preference')) localStorage.setItem('portfolio_theme_preference', theme);
+    }, viewport.theme);
     const errors = [];
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' });
     await page.locator('#total-equity').waitFor();
+    assert.equal(await page.locator('html').getAttribute('data-theme'), viewport.theme, `${viewport.name}: initial theme`);
+    assert.equal(await page.locator('#theme-preference').inputValue(), viewport.theme, `${viewport.name}: theme control`);
+    assert.equal(await page.locator('.nav').evaluate(element => getComputedStyle(element).position), viewport.width <= 900 ? 'fixed' : 'static', `${viewport.name}: responsive navigation`);
     assert.equal(await page.locator('#cash-weight').count(), 0, `${viewport.name}: cash metric removed`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `${viewport.name}: horizontal overflow`);
-    await page.screenshot({ path: join(tmpdir(), `portfolio-home-${viewport.name}.png`), fullPage: true });
+    await page.screenshot({ path: join(phase1aScreenshots, `${viewport.name}-${viewport.theme}-home.png`), fullPage: true });
     await page.locator('[data-performance-view="benchmark"]').click();
     await page.locator('#benchmark-chart svg').waitFor();
     await page.screenshot({ path: join(tmpdir(), `portfolio-benchmark-${viewport.name}.png`), fullPage: true });
@@ -78,6 +86,12 @@ try {
     assert.equal(await page.locator('#fee').count(), 0, `${viewport.name}: fee input removed`);
     assert.equal(await page.locator('#funding-source').inputValue(), 'NEW_CAPITAL', `${viewport.name}: new capital default`);
     if (viewport.name === 'desktop') {
+      await page.locator('[data-page="settings"]').click();
+      await page.locator('#theme-preference').selectOption('dark');
+      assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark', 'desktop: theme switches immediately');
+      await page.reload({ waitUntil: 'networkidle' });
+      assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark', 'desktop: theme persists after reload');
+      await page.locator('[data-page="transactions"]').click();
       await page.locator('#ticker').selectOption('QQQ');
       await page.locator('#quantity').fill('1');
       await page.locator('#price').fill('600');
@@ -93,7 +107,7 @@ try {
     assert.deepEqual(errors, [], `${viewport.name}: browser errors`);
     await page.close();
   }
-  console.log('Visual smoke passed: desktop, tablet landscape, tablet portrait, mobile.');
+  console.log('Visual smoke passed: 1440, 1024, 768, 390 and 360 with light/dark themes.');
 } finally {
   await browser.close();
   server.close();
