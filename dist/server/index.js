@@ -5,7 +5,7 @@ const unb64 = value => Uint8Array.from(atob(value.replaceAll('-', '+').replaceAl
 const json = (value, status = 200, headers = {}) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
 const STRATEGY_DEFAULTS = Object.freeze({ targetQQQ: 10, targetQLD: 70, targetSGOV: 20, qqqTrigger1: -20, qqqTrigger1SgovPct: 50, qqqTrigger2: -30, qqqTrigger2RemainingPct: 100, qldRebalanceTrigger: 85 });
 const REASONS = new Set(['REGULAR_BUY', 'QQQ_DRAWDOWN_1', 'QQQ_DRAWDOWN_2', 'QLD_REBALANCE', 'NEW_CAPITAL', 'OTHER']);
-let marketCache = { expires: 0, value: null };
+const marketCache = new Map();
 
 async function sign(value, secret) { return b64(await crypto.subtle.sign('HMAC', await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']), enc.encode(value))); }
 async function session(env) { const payload = b64(enc.encode(JSON.stringify({ exp: Date.now() + 2592e6 }))); return `${payload}.${await sign(payload, env.SESSION_SECRET)}`; }
@@ -99,18 +99,20 @@ async function validateAgainstLedger(env, input, excludedId) {
   if (input.trade_type === 'SELL') return Number(input.quantity) > quantityAvailable(rows, input.ticker.toUpperCase(), excludedId) + 1e-7 ? '보유 수량보다 많이 매도할 수 없습니다.' : null;
   return Number(input.amount) > settlementBalance(rows, excludedId) + 0.005 ? '기존 매도대금 잔액보다 많이 매수할 수 없습니다.' : null;
 }
-async function qqqMarketHistory() {
-  if (marketCache.value && marketCache.expires > Date.now()) return marketCache.value;
-  const response = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/QQQ?range=max&interval=1d&events=div%2Csplits', { headers: { 'user-agent': 'Mozilla/5.0 portfolio-dashboard' } });
-  if (!response.ok) throw new Error('QQQ 가격 이력을 불러오지 못했습니다.');
+async function marketHistory(ticker) {
+  const cached = marketCache.get(ticker);
+  if (cached?.value && cached.expires > Date.now()) return cached.value;
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=max&interval=1d&events=div%2Csplits`, { headers: { 'user-agent': 'Mozilla/5.0 portfolio-dashboard' } });
+  if (!response.ok) throw new Error(`${ticker} 가격 이력을 불러오지 못했습니다.`);
   const result = (await response.json())?.chart?.result?.[0];
   const timestamps = result?.timestamp || [], closes = result?.indicators?.quote?.[0]?.close || [], adjusted = result?.indicators?.adjclose?.[0]?.adjclose || [];
   const points = timestamps.map((timestamp, index) => ({ date: new Date(timestamp * 1000).toISOString().slice(0, 10), close: Number(closes[index]), adjusted: Number(adjusted[index]) }))
     .filter(point => Number.isFinite(point.close) && point.close > 0);
-  if (!points.length) throw new Error('QQQ 가격 이력이 없습니다.');
-  marketCache = { expires: Date.now() + 3600000, value: points };
+  if (!points.length) throw new Error(`${ticker} 가격 이력이 없습니다.`);
+  marketCache.set(ticker, { expires: Date.now() + 3600000, value: points });
   return points;
 }
+const qqqMarketHistory = () => marketHistory('QQQ');
 async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
   const points = await qqqMarketHistory();
   let peak = -Infinity, peakIndex = 0;
@@ -224,6 +226,19 @@ async function api(request, env, url) {
           .map(point => ({ date: point.date, value: adjustedAvailable ? point.adjusted : point.close })),
       });
     } catch { return json({ basis: null, points: [], error: 'QQQ 벤치마크를 불러오지 못했습니다.' }, 502); }
+  }
+  if (url.pathname === '/api/market-history' && request.method === 'POST') {
+    const input = await body(request);
+    const tickers = [...new Set(Array.isArray(input?.tickers) ? input.tickers.filter(ticker => ['QQQ', 'QLD', 'SGOV'].includes(ticker)) : [])].slice(0, 3);
+    if (!tickers.length) return json({ error: '지원되는 ETF를 선택하세요.' }, 400);
+    try {
+      const entries = await Promise.all(tickers.map(async ticker => {
+        const history = await marketHistory(ticker);
+        const adjusted = history.some(point => Number.isFinite(point.adjusted) && point.adjusted > 0);
+        return [ticker, history.filter(point => !adjusted || (Number.isFinite(point.adjusted) && point.adjusted > 0)).map(point => ({ date: point.date, value: adjusted ? point.adjusted : point.close }))];
+      }));
+      return json({ histories: Object.fromEntries(entries), source: 'Yahoo Finance', fetchedAt: new Date().toISOString(), adjustedPrices: true });
+    } catch (error) { return json({ error: error.message }, 502); }
   }
   if (url.pathname === '/api/quotes' && request.method === 'POST') {
     const input = await body(request), tickers = [...new Set(Array.isArray(input?.tickers) ? input.tickers.filter(ticker => typeof ticker === 'string' && /^[A-Z.]{1,15}$/i.test(ticker)).map(ticker => ticker.toUpperCase()) : [])];

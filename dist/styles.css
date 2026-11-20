@@ -319,6 +319,32 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
 .source-grid > div { display: grid; gap: 5px; padding: 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); }
 .source-grid span { color: var(--muted); font-size: .78rem; }
 .source-grid strong { color: var(--ink); font-size: .84rem; line-height: 1.45; }
+.research-warning { margin: 0 0 16px; padding: 13px 15px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: 12px; color: var(--warning); background: var(--warning-soft); line-height: 1.55; }
+.lab-layout { display: grid; grid-template-columns: minmax(280px, .62fr) minmax(0, 1.38fr); gap: 16px; }
+.research-controls { display: grid; align-content: start; gap: 15px; }
+.research-controls h3, .research-results h3, .optimizer-card h3, .stress-card h3 { margin: 0; }
+.allocation-inputs, .two-field { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.two-field { grid-template-columns: 1fr 1fr; }
+.allocation-inputs label { position: relative; }
+.allocation-inputs label input { padding-right: 30px; }
+.allocation-inputs label { color: var(--muted); }
+.checkbox-label { display: flex; align-items: center; gap: 9px; color: var(--ink); }
+.checkbox-label input { width: 18px; min-height: 18px; }
+.research-comparison { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.strategy-result { padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.strategy-result h4 { margin: 0 0 10px; color: var(--ink-strong); }
+.strategy-result dl { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin: 0; }
+.strategy-result dt { color: var(--muted); font-size: .78rem; }
+.strategy-result dd { margin: 0; color: var(--ink); font-size: .84rem; font-weight: 750; }
+.optimizer-actions { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 8px; margin: 14px 0; }
+.optimizer-actions progress { width: 100%; accent-color: var(--accent); }
+.optimizer-actions span { color: var(--muted); font-size: .82rem; }
+.optimizer-results { display: grid; gap: 7px; }
+.optimizer-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); font-size: .84rem; }
+.optimizer-row strong { color: var(--ink-strong); }
+.optimizer-row span { color: var(--muted); }
+.stress-card { display: grid; align-content: start; gap: 14px; }
+.stress-result { padding: 14px; border-left: 3px solid var(--warning); color: var(--ink); background: var(--warning-soft); line-height: 1.55; }
 .danger { color: #fff; background: var(--danger); border-color: var(--danger); }
 .adjustment-modal form { display: grid; gap: 13px; }
 .balance-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -334,6 +360,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
   .workspace { width: min(calc(100% - 258px), 980px); margin-left: 238px; }
   .settings-layout { grid-template-columns: 1fr; }
   .analysis-layout { grid-template-columns: 1fr; }
+  .lab-layout { grid-template-columns: 1fr; }
   .analysis-controls { grid-template-columns: repeat(3, 1fr); }
   .analysis-controls h3, .analysis-controls fieldset, .analysis-controls .field-error { grid-column: 1 / -1; }
   .source-grid { grid-template-columns: 1fr 1fr; }
@@ -346,7 +373,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
   .nav-item { display: grid; min-width: 0; min-height: 54px; place-items: center; gap: 1px; padding: 4px 2px; color: var(--muted); background: transparent; border-color: transparent; font-size: 1.04rem; text-align: center; }
   .nav-item span { overflow: hidden; max-width: 100%; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
   .nav-item.active { color: var(--accent-strong); background: transparent; border-color: transparent; }
-  .market-nav-item { display: none; }
+  .market-nav-item, .lab-nav-item { display: none; }
   .nav-primary-action { margin: 0; color: var(--accent-strong); background: transparent; border-color: transparent; }
   .metrics { grid-template-columns: 1fr 1fr; }
   .holding-metrics { grid-template-columns: 1fr 1fr; }
@@ -397,6 +424,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
   .analysis-controls h3, .analysis-controls fieldset, .analysis-controls .field-error { grid-column: auto; }
   .market-comparison-chart, .market-comparison-chart svg { min-height: 260px; height: 260px; }
   .source-grid { grid-template-columns: 1fr; }
+  .research-comparison { grid-template-columns: 1fr; }
 }
 @media (max-width: 520px) {
   .auth-shell { padding: 14px; }
@@ -418,5 +446,8 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
   .risk-components { grid-template-columns: 1fr; }
   .risk-weight-form label { grid-template-columns: 88px 1fr 38px; }
   .analog-row { grid-template-columns: 1fr; }
+  .allocation-inputs, .two-field { grid-template-columns: 1fr; }
+  .optimizer-actions { grid-template-columns: 1fr 1fr; }
+  .optimizer-actions progress, .optimizer-actions span { grid-column: 1 / -1; }
   .toast { top: 12px; right: 16px; left: 16px; max-width: none; }
 }

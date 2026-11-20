@@ -12,10 +12,14 @@ const phase1aScreenshots = resolve(import.meta.dirname, '../docs/investment-inte
 const phase1bScreenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase1b');
 const phase2Screenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase2');
 const phase3Screenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase3');
+const phase4Screenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase4');
+const phase5Screenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase5');
 await mkdir(phase1aScreenshots, { recursive: true });
 await mkdir(phase1bScreenshots, { recursive: true });
 await mkdir(phase2Screenshots, { recursive: true });
 await mkdir(phase3Screenshots, { recursive: true });
+await mkdir(phase4Screenshots, { recursive: true });
+await mkdir(phase5Screenshots, { recursive: true });
 const transactions = [
   { id: '11111111-1111-4111-8111-111111111111', traded_at: '2026-09-17T05:00:00Z', ticker: 'QLD', trade_type: 'BUY', quantity: 5, price: 87, amount: 435, fee: 1, memo: '' },
   { id: '22222222-2222-4222-8222-222222222222', traded_at: '2026-09-16T05:00:00Z', ticker: 'QQQ', trade_type: 'BUY', quantity: 2, price: 590, amount: 1180, fee: 1, memo: '' },
@@ -49,6 +53,13 @@ const server = createServer(async (request, response) => {
   if (request.url === '/api/data') { response.setHeader('content-type', 'application/json'); response.end(json({ transactions, snapshots, adjustments: [] })); return; }
   if (request.url === '/api/settings') { response.setHeader('content-type', 'application/json'); response.end(json({ settings })); return; }
   if (request.url === '/api/benchmark') { response.setHeader('content-type', 'application/json'); response.end(json({ basis: 'adjusted_close', points: benchmark })); return; }
+  if (request.url === '/api/market-history' && request.method === 'POST') {
+    response.setHeader('content-type', 'application/json'); response.end(json({ source: 'Yahoo Finance', adjustedPrices: true, fetchedAt: new Date().toISOString(), histories: {
+      QQQ: benchmark,
+      QLD: benchmark.map((point, index) => ({ date: point.date, value: 80 + index * 0.18 + Math.sin(index / 14) * 16 })),
+      SGOV: benchmark.map((point, index) => ({ date: point.date, value: 100 + index * 0.01 })),
+    } })); return;
+  }
   if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
   if (request.url === '/api/quotes') { response.setHeader('content-type', 'application/json'); response.end(json({ fetchedAt: new Date().toISOString(), quotes: [{ ticker: 'QQQ', price: 600 }, { ticker: 'QLD', price: 91 }, { ticker: 'SGOV', price: 100.5 }] })); return; }
   if (request.url === '/api/transactions' && request.method === 'POST') {
@@ -116,6 +127,21 @@ try {
       await page.locator('#market-comparison-chart svg').waitFor();
       assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark', 'tablet landscape: market dark theme');
       await page.screenshot({ path: join(phase3Screenshots, 'tablet-landscape-dark-market-analysis.png'), fullPage: true });
+      await page.locator('[data-page="lab"]').click();
+      await page.locator('#run-research').click();
+      await page.locator('.strategy-result').first().waitFor();
+      assert.equal(await page.locator('.strategy-result').count(), 3, 'tablet landscape: three strategy comparison');
+      assert.match(await page.locator('#research-data-status').textContent(), /공통 거래일/);
+      await page.locator('#run-stress').click();
+      assert.match(await page.locator('#stress-result').textContent(), /예상 자산/);
+      await page.screenshot({ path: join(phase4Screenshots, 'tablet-landscape-dark-strategy-lab.png'), fullPage: true });
+      await page.locator('#start-optimizer').click();
+      await page.waitForFunction(() => document.querySelector('#optimizer-status').textContent.includes('264개 완료'), null, { timeout: 30000 });
+      assert.equal(await page.locator('.optimizer-row').count(), 5, 'tablet landscape: optimizer top five');
+      await page.screenshot({ path: join(phase5Screenshots, 'tablet-landscape-dark-optimizer.png'), fullPage: true });
+      await page.locator('#start-optimizer').click();
+      await page.locator('#cancel-optimizer').click();
+      await page.waitForFunction(() => document.querySelector('#optimizer-status').textContent.includes('취소됨'), null, { timeout: 30000 });
       await page.locator('[data-page="home"]').click();
     }
     if (viewport.name === 'tablet-portrait') {

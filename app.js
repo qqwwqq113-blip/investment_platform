@@ -18,6 +18,7 @@ import {
   validateTransaction,
   validateStrategy,
 } from './finance.js';
+import { simulateStrategy, stressTest } from './research.js';
 
 const $ = id => document.getElementById(id);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -33,6 +34,9 @@ let quotes = {};
 let quotesFetchedAt = null;
 let editingId = null;
 let transactionSubmitting = false;
+let researchHistories = null;
+let researchResults = [];
+let optimizerWorker = null;
 let toastTimer = null;
 let sessionToken = new URLSearchParams(location.hash.slice(1)).get('session') || '';
 if (sessionToken) history.replaceState(null, '', location.pathname);
@@ -387,6 +391,56 @@ function renderMarketAnalytics() {
   $('market-analogs').innerHTML = analogs.length ? analogs.map(item => `<article class="analog-row"><strong>${item.date}<small>유사도 ${item.similarity.toFixed(0)}</small></strong><div><span>이후 3개월<b class="${item.r3 >= 0 ? 'positive' : 'negative'}">${signed(item.r3)}</b></span><span>이후 6개월<b class="${item.r6 >= 0 ? 'positive' : 'negative'}">${signed(item.r6)}</b></span><span>이후 12개월<b class="${item.r12 >= 0 ? 'positive' : 'negative'}">${signed(item.r12)}</b></span></div></article>`).join('') : '<p class="empty">유사 구간 계산에 필요한 장기 데이터가 부족합니다.</p>';
 }
 
+async function loadResearchHistories() {
+  if (researchHistories) return researchHistories;
+  $('research-data-status').textContent = 'QQQ · QLD · SGOV 가격 로딩 중';
+  const response = await api('/api/market-history', { method: 'POST', body: { tickers: ['QQQ', 'QLD', 'SGOV'] } });
+  if (response.error) throw new Error(response.error.message);
+  researchHistories = response.data.histories;
+  const starts = Object.values(researchHistories).map(points => points[0]?.date).filter(Boolean).sort();
+  const ends = Object.values(researchHistories).map(points => points.at(-1)?.date).filter(Boolean).sort();
+  $('research-data-status').textContent = `${starts.at(-1)} ~ ${ends[0]} 공통 거래일`;
+  return researchHistories;
+}
+function researchConfig() {
+  const weights = { QQQ: Number($('research-qqq').value), QLD: Number($('research-qld').value), SGOV: Number($('research-sgov').value) };
+  if (Object.values(weights).some(value => !Number.isFinite(value) || value < 0) || Math.abs(Object.values(weights).reduce((sum, value) => sum + value, 0) - 100) > 1e-7) throw new Error('자산 비중 합계를 100%로 입력하세요.');
+  const mode = $('research-mode').value, initial = Number($('research-initial').value), monthly = Number($('research-monthly').value);
+  if ((mode === 'lump' || mode === 'mixed') && initial <= 0) throw new Error('초기 투자금은 0보다 커야 합니다.');
+  if ((mode === 'monthly' || mode === 'mixed') && monthly <= 0) throw new Error('월 적립금은 0보다 커야 합니다.');
+  return { weights, mode, initial, monthly, feeRate: Number($('research-fee').value), taxRate: Number($('research-tax').value), rebalanceMonths: Number($('research-rebalance').value), drawdownRule: $('research-drawdown').checked };
+}
+function metricValue(value, kind = 'rate') {
+  if (value === null || !Number.isFinite(value)) return '—';
+  return kind === 'money' ? usd.format(value) : kind === 'number' ? value.toFixed(2) : signed(value);
+}
+function renderResearchCurve(items) {
+  const series = items.map(item => ({ label: item.name, color: item.color, points: item.result.curve.map(point => ({ date: point.date, value: point.twr })) }));
+  const values = series.flatMap(item => item.points.map(point => point.value)), dates = series.flatMap(item => item.points.map(point => new Date(point.date).getTime()));
+  const low = Math.min(...values), high = Math.max(...values), start = Math.min(...dates), end = Math.max(...dates), width = 900, height = 330, pad = 42;
+  const x = date => pad + (new Date(date).getTime() - start) / Math.max(1, end - start) * (width - pad * 2);
+  const y = value => height - pad - (value - low) / Math.max(1e-9, high - low) * (height - pad * 2);
+  const grid = Array.from({ length: 5 }, (_, index) => { const value = low + (high - low) * index / 4; return `<line class="grid-line" x1="${pad}" x2="${width - pad}" y1="${y(value)}" y2="${y(value)}"/><text x="4" y="${y(value) + 4}">${value.toFixed(0)}</text>`; }).join('');
+  const paths = series.map(item => `<path d="${item.points.map((point, index) => `${index ? 'L' : 'M'}${x(point.date).toFixed(1)},${y(point.value).toFixed(1)}`).join(' ')}" fill="none" stroke="${item.color}" stroke-width="3"/>`).join('');
+  $('research-curve').innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${grid}${paths}</svg><div class="chart-legend">${series.map(item => `<span><i style="background:${item.color}"></i>${item.label}</span>`).join('')}</div>`;
+}
+function renderResearchResults(items) {
+  $('research-comparison').innerHTML = items.map(item => `<article class="strategy-result"><h4>${item.name}</h4><dl><dt>최종자산</dt><dd>${metricValue(item.result.finalEquity, 'money')}</dd><dt>순입금</dt><dd>${metricValue(item.result.contributions, 'money')}</dd><dt>TWR</dt><dd>${metricValue(item.result.twr)}</dd><dt>XIRR</dt><dd>${metricValue(item.result.xirr)}</dd><dt>CAGR</dt><dd>${metricValue(item.result.cagr)}</dd><dt>MDD</dt><dd class="negative">${metricValue(item.result.mdd)}</dd><dt>Sharpe</dt><dd>${metricValue(item.result.sharpe, 'number')}</dd><dt>비용·세금</dt><dd>${usd.format(item.result.fees + item.result.taxes)}</dd></dl></article>`).join('');
+  renderResearchCurve(items);
+}
+async function runResearch() {
+  const config = researchConfig(), histories = await loadResearchHistories();
+  const definitions = [
+    { name: '분기 리밸런싱', color: 'var(--chart-equity)', rebalanceMonths: 3, drawdownRule: false },
+    { name: '연간 리밸런싱', color: 'var(--chart-benchmark)', rebalanceMonths: 12, drawdownRule: false },
+    { name: 'QQQ MDD 대응', color: 'var(--warning)', rebalanceMonths: config.rebalanceMonths, drawdownRule: true },
+  ];
+  researchResults = definitions.map(definition => ({ ...definition, result: simulateStrategy({ ...config, ...definition, histories }) }));
+  renderResearchResults(researchResults);
+  return { config, histories };
+}
+function optimizerBase(config) { return { mode: config.mode, initial: config.initial, monthly: config.monthly, feeRate: config.feeRate, taxRate: config.taxRate }; }
+
 function renderStrategy(allocation) {
   const drawdown = cache.drawdown;
   const latestDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
@@ -687,6 +741,40 @@ $('market-normalization').onchange = renderMarketChart;
   renderMarketAnalytics();
 }; });
 $('reset-risk-weights').onclick = () => { localStorage.setItem(riskWeightKey, JSON.stringify(defaultRiskWeights)); renderMarketAnalytics(); toast('위험 가중치를 기본값으로 복원했습니다.'); };
+$('research-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = $('run-research');
+  button.disabled = true; button.textContent = '가격 계산 중…'; $('research-error').textContent = '';
+  try { await runResearch(); toast('동일 조건의 3개 전략 비교를 완료했습니다.'); }
+  catch (error) { $('research-error').textContent = error.message; }
+  finally { button.disabled = false; button.textContent = '3개 전략 비교 실행'; }
+};
+$('start-optimizer').onclick = async () => {
+  try {
+    const config = researchConfig(), histories = await loadResearchHistories();
+    optimizerWorker?.terminate();
+    optimizerWorker = new Worker('./optimizer-worker.js', { type: 'module' });
+    $('start-optimizer').disabled = true; $('cancel-optimizer').disabled = false; $('optimizer-progress').value = 0; $('optimizer-status').textContent = '탐색 준비 중'; $('optimizer-results').innerHTML = '';
+    optimizerWorker.onmessage = event => {
+      const message = event.data;
+      if (message.type === 'progress') { $('optimizer-progress').max = message.total; $('optimizer-progress').value = message.completed; $('optimizer-status').textContent = `${message.completed} / ${message.total}`; }
+      if (message.type === 'cancelled') { $('optimizer-status').textContent = `${message.completed}개에서 취소됨`; $('start-optimizer').disabled = false; $('cancel-optimizer').disabled = true; }
+      if (message.type === 'complete') {
+        $('optimizer-progress').value = message.total; $('optimizer-status').textContent = `${message.total}개 완료`; $('start-optimizer').disabled = false; $('cancel-optimizer').disabled = true;
+        $('optimizer-results').innerHTML = message.results.map((item, index) => `<article class="optimizer-row"><strong>${index + 1}. QQQ ${item.weights.QQQ}% · QLD ${item.weights.QLD}% · SGOV ${item.weights.SGOV}%</strong><span>${item.rebalanceMonths === 3 ? '분기' : '연간'}${item.drawdownRule ? ' · MDD 규칙' : ''}</span><b>CAGR ${signed(item.metrics.cagr)} · MDD ${signed(item.metrics.mdd)}</b></article>`).join('');
+      }
+    };
+    optimizerWorker.postMessage({ type: 'start', histories, base: optimizerBase(config) });
+  } catch (error) { $('optimizer-status').textContent = error.message; }
+};
+$('cancel-optimizer').onclick = () => { optimizerWorker?.postMessage({ type: 'cancel' }); $('optimizer-status').textContent = '취소 요청 중'; };
+$('run-stress').onclick = () => {
+  if (!researchResults.length) { $('stress-result').textContent = '전략 비교를 먼저 실행하세요.'; return; }
+  const weights = researchConfig().weights;
+  const shocks = { QQQ: Number($('shock-qqq').value), QLD: Number($('shock-qld').value), SGOV: Number($('shock-sgov').value) };
+  const stressed = stressTest(researchResults[0].result, weights, shocks);
+  $('stress-result').innerHTML = `가중 충격 <strong>${signed(stressed.impact)}</strong><br />예상 자산 <strong>${usd.format(stressed.stressedEquity)}</strong><br /><small>상관관계·회복 경로·유동성은 반영하지 않은 즉시 충격입니다.</small>`;
+};
 document.querySelectorAll('[data-range]').forEach(element => { element.onclick = () => { range = element.dataset.range; document.querySelectorAll('[data-range]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); renderAllocationHistory(cache.snaps); }; });
 document.querySelectorAll('[data-performance-view]').forEach(element => { element.onclick = () => { performanceView = element.dataset.performanceView; document.querySelectorAll('[data-performance-view]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); }; });
 document.querySelectorAll('.trade-type').forEach(element => { element.onclick = () => trade(element.dataset.type); });

@@ -6,7 +6,7 @@ const dist = resolve(root, 'dist');
 const server = resolve(dist, 'server');
 await mkdir(server, { recursive: true });
 
-const publicFiles = ['index.html', 'app.js', 'finance.js', 'styles.css'];
+const publicFiles = ['index.html', 'app.js', 'finance.js', 'research.js', 'optimizer-worker.js', 'styles.css'];
 const source = {};
 for (const file of publicFiles) {
   source[file] = (await readFile(resolve(root, file), 'utf8')).replaceAll('\r\n', '\n');
@@ -16,7 +16,7 @@ await mkdir(resolve(dist, '.openai'), { recursive: true });
 const hosting = (await readFile(resolve(root, '.openai/hosting.json'), 'utf8')).replaceAll('\r\n', '\n');
 await writeFile(resolve(dist, '.openai/hosting.json'), hosting);
 
-const mime = { 'index.html': 'text/html; charset=utf-8', 'app.js': 'application/javascript; charset=utf-8', 'finance.js': 'application/javascript; charset=utf-8', 'styles.css': 'text/css; charset=utf-8' };
+const mime = { 'index.html': 'text/html; charset=utf-8', 'app.js': 'application/javascript; charset=utf-8', 'finance.js': 'application/javascript; charset=utf-8', 'research.js': 'application/javascript; charset=utf-8', 'optimizer-worker.js': 'application/javascript; charset=utf-8', 'styles.css': 'text/css; charset=utf-8' };
 const assets = {};
 for (const file of publicFiles) {
   const encoded = Buffer.from(source[file]).toString('base64');
