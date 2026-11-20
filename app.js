@@ -238,6 +238,155 @@ function renderTransactions() {
   $('transactions-list').innerHTML = rows.length ? `<table><thead><tr><th>일시</th><th>구분</th><th>종목</th><th>사유</th><th>수량</th><th>단가</th><th>금액</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td data-label="일시">${new Date(row.traded_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</td><td data-label="구분">${tradeNames[row.trade_type]}</td><td data-label="종목">${row.ticker}</td><td data-label="사유">${reasonNames[row.reason] || '—'}</td><td data-label="수량">${num.format(row.quantity)}</td><td data-label="단가">${usd.format(Number(row.price))}</td><td data-label="금액">${usd.format(Number(row.amount))}</td><td class="row-actions"><button class="more-button" aria-label="거래 메뉴" data-menu="${row.id}">⋮</button><div class="row-menu" data-menu-panel="${row.id}"><button data-edit="${row.id}">수정</button><button class="danger-text" data-delete="${row.id}">삭제</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="empty">조건에 맞는 거래가 없습니다.</p>';
 }
 
+const DASHBOARD_CARDS = [
+  { id: 'status', label: '포트폴리오 상태', selector: '#page-home > .hero' },
+  { id: 'performance', label: '포트폴리오 성과', selector: '#page-home > .history-card:not(.secondary-card)' },
+  { id: 'strategy', label: '전략 상태', selector: '#page-home > .strategy-card' },
+  { id: 'market', label: '시장·전략 연결', selector: '#page-home > .market-bridge-card' },
+  { id: 'allocation', label: '자산 배분', selector: '#page-home > .allocation-card' },
+  { id: 'allocation-history', label: '자산 비중 변화', selector: '#page-home > .secondary-card' },
+  { id: 'holdings', label: '보유 자산', selector: '#page-home > .holdings-summary-card' },
+  { id: 'transactions', label: '최근 거래', selector: '#page-home > .transactions-summary-card' },
+];
+const dashboardKey = 'portfolio_dashboard_layout_v1';
+const defaultDashboardLayout = () => DASHBOARD_CARDS.map(item => ({ id: item.id, visible: true }));
+function dashboardLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(dashboardKey) || 'null');
+    if (!Array.isArray(saved)) return defaultDashboardLayout();
+    const valid = saved.filter(item => DASHBOARD_CARDS.some(card => card.id === item.id));
+    const missing = DASHBOARD_CARDS.filter(card => !valid.some(item => item.id === card.id)).map(card => ({ id: card.id, visible: true }));
+    return [...valid, ...missing].map(item => ({ id: item.id, visible: item.visible !== false }));
+  } catch { return defaultDashboardLayout(); }
+}
+function applyDashboardLayout(layout = dashboardLayout()) {
+  const home = $('page-home');
+  layout.forEach(item => {
+    const card = DASHBOARD_CARDS.find(entry => entry.id === item.id);
+    const element = card && document.querySelector(card.selector);
+    if (!element) return;
+    element.dataset.dashboardCard = item.id;
+    element.classList.toggle('dashboard-card-hidden', !item.visible);
+    home.appendChild(element);
+  });
+}
+function renderDashboardEditor(layout = dashboardLayout()) {
+  $('dashboard-card-editor').innerHTML = layout.map((item, index) => {
+    const card = DASHBOARD_CARDS.find(entry => entry.id === item.id);
+    return `<div class="dashboard-editor-row" data-editor-card="${item.id}"><label><input type="checkbox" ${item.visible ? 'checked' : ''} />${card.label}</label><div class="dashboard-order-actions"><button type="button" data-move-card="up" aria-label="${card.label} 위로" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move-card="down" aria-label="${card.label} 아래로" ${index === layout.length - 1 ? 'disabled' : ''}>↓</button></div></div>`;
+  }).join('');
+}
+function editorLayout() {
+  return [...document.querySelectorAll('[data-editor-card]')].map(row => ({ id: row.dataset.editorCard, visible: row.querySelector('input').checked }));
+}
+
+const riskWeightKey = 'portfolio_market_risk_weights_v1';
+const defaultRiskWeights = { drawdown: 45, concentration: 35, leverage: 20 };
+function riskWeights() {
+  try { return { ...defaultRiskWeights, ...JSON.parse(localStorage.getItem(riskWeightKey) || '{}') }; } catch { return { ...defaultRiskWeights }; }
+}
+function riskMetrics() {
+  const drawdown = Math.min(100, Math.abs(Number(cache.drawdown?.current || 0)) * 200);
+  const concentration = Math.min(100, Math.max(0, ...(cache.allocation?.rows || []).map(row => row.currentWeight)));
+  const exposure = nominalNasdaqExposure(cache.allocation || { total: 0, rows: [] }) * 100;
+  const leverage = Math.min(100, Math.max(0, exposure - 70) / 1.3);
+  const weights = riskWeights();
+  const total = Math.max(1, weights.drawdown + weights.concentration + weights.leverage);
+  const score = (drawdown * weights.drawdown + concentration * weights.concentration + leverage * weights.leverage) / total;
+  return { score, drawdown, concentration, leverage, exposure, weights };
+}
+function portfolioIndexSeries() {
+  let value = 100;
+  return [...cache.snaps].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date)).flatMap(item => {
+    const daily = Number(item.twr_daily_return);
+    if (!Number.isFinite(daily)) return [];
+    value *= 1 + daily;
+    return [{ date: item.snapshot_date, value }];
+  });
+}
+function marketSeries() {
+  return {
+    portfolio: { label: 'Portfolio TWR', color: 'var(--chart-equity)', points: portfolioIndexSeries() },
+    qqq: { label: 'QQQ 조정가격', color: 'var(--chart-benchmark)', points: (cache.benchmark?.points || []).map(point => ({ date: point.date, value: Number(point.value) })).filter(point => Number.isFinite(point.value)) },
+    equity: { label: '평가자산', color: 'var(--warning)', points: cache.snaps.map(item => ({ date: item.snapshot_date, value: Number(item.total_equity) })).filter(point => Number.isFinite(point.value) && point.value > 0) },
+  };
+}
+function selectedMarketSeries() { return [...document.querySelectorAll('[data-market-series]:checked')].map(input => input.dataset.marketSeries); }
+function normalizedMarketData() {
+  const all = marketSeries(), selected = selectedMarketSeries();
+  const period = $('market-period').value, mode = $('market-normalization').value;
+  const latest = Math.max(...selected.flatMap(id => all[id].points.map(point => new Date(`${point.date}T00:00:00Z`).getTime())));
+  const cutoff = period === 'ALL' ? -Infinity : latest - Number(period) * 86400000;
+  const filtered = selected.map(id => ({ id, ...all[id], points: all[id].points.filter(point => new Date(`${point.date}T00:00:00Z`).getTime() >= cutoff) }));
+  const commonStart = Math.max(...filtered.map(series => new Date(`${series.points[0]?.date || '9999-12-31'}T00:00:00Z`).getTime()));
+  return filtered.map(series => {
+    const points = series.points.filter(point => new Date(`${point.date}T00:00:00Z`).getTime() >= commonStart);
+    const base = points[0]?.value;
+    return { ...series, points: points.map(point => ({ ...point, value: mode === 'return' ? (point.value / base - 1) * 100 : point.value / base * 100 })) };
+  });
+}
+function renderMarketChart() {
+  const selected = selectedMarketSeries();
+  $('market-selection-error').textContent = selected.length ? '' : '지표를 1개 이상 선택하세요.';
+  if (!selected.length) { $('market-comparison-chart').innerHTML = '<p class="empty">선택된 지표가 없습니다.</p>'; return; }
+  const series = normalizedMarketData().filter(item => item.points.length > 1);
+  if (!series.length) { $('market-comparison-chart').innerHTML = '<p class="empty">동일 기간에 비교할 데이터가 부족합니다.</p>'; return; }
+  const values = series.flatMap(item => item.points.map(point => point.value));
+  const dates = series.flatMap(item => item.points.map(point => new Date(`${point.date}T00:00:00Z`).getTime()));
+  const min = Math.min(...values), max = Math.max(...values), low = min === max ? min - 1 : min, high = min === max ? max + 1 : max;
+  const start = Math.min(...dates), end = Math.max(...dates), width = 900, height = 330, pad = 42;
+  const x = date => pad + (new Date(`${date}T00:00:00Z`).getTime() - start) / Math.max(1, end - start) * (width - pad * 2);
+  const y = value => height - pad - (value - low) / (high - low) * (height - pad * 2);
+  const grid = Array.from({ length: 5 }, (_, index) => { const value = low + (high - low) * index / 4; return `<line class="grid-line" x1="${pad}" x2="${width - pad}" y1="${y(value)}" y2="${y(value)}"/><text x="4" y="${y(value) + 4}">${value.toFixed(1)}${$('market-normalization').value === 'return' ? '%' : ''}</text>`; }).join('');
+  const paths = series.map(item => {
+    let previous = null;
+    const d = item.points.map(point => { const gap = previous ? new Date(point.date) - new Date(previous.date) : Infinity; const command = !previous || gap > 10 * 86400000 ? 'M' : 'L'; previous = point; return `${command}${x(point.date).toFixed(1)},${y(point.value).toFixed(1)}`; }).join(' ');
+    return `<path d="${d}" fill="none" stroke="${item.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }).join('');
+  $('market-comparison-chart').innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${grid}${paths}</svg>`;
+  $('market-chart-legend').innerHTML = series.map(item => `<span><i style="background:${item.color}"></i>${item.label}</span>`).join('');
+  $('market-chart-summary').textContent = `${series[0].points[0].date} ~ ${series[0].points.at(-1).date} · ${$('market-normalization').selectedOptions[0].textContent}`;
+}
+function calculateAnalogs(points) {
+  const sorted = points.map(point => ({ date: point.date, value: Number(point.value) })).filter(point => Number.isFinite(point.value) && point.value > 0).sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length < 380) return [];
+  const horizon = 63, last = sorted.length - 1;
+  const currentReturn = sorted[last].value / sorted[last - horizon].value - 1;
+  const candidates = [];
+  for (let index = horizon; index <= last - 252; index += 1) {
+    const trailing = sorted[index].value / sorted[index - horizon].value - 1;
+    candidates.push({ index, score: Math.abs(trailing - currentReturn), trailing });
+  }
+  const picked = [];
+  for (const candidate of candidates.sort((a, b) => a.score - b.score)) {
+    if (picked.every(item => Math.abs(item.index - candidate.index) > 90)) picked.push(candidate);
+    if (picked.length === 3) break;
+  }
+  return picked.map(item => ({ date: sorted[item.index].date, similarity: Math.max(0, 100 - item.score * 300), r3: sorted[item.index + 63].value / sorted[item.index].value - 1, r6: sorted[item.index + 126].value / sorted[item.index].value - 1, r12: sorted[item.index + 252].value / sorted[item.index].value - 1 }));
+}
+function renderMarketAnalytics() {
+  if (!$('market-comparison-chart')) return;
+  const points = cache.benchmark?.points || [];
+  const lastDate = points.at(-1)?.date;
+  const age = lastDate ? (Date.now() - new Date(`${lastDate}T23:59:59Z`).getTime()) / 86400000 : Infinity;
+  $('market-freshness').textContent = lastDate ? `${lastDate} 종가 기준${age > 4 ? ' · 갱신 지연 가능' : ''}` : '시장 데이터를 불러오지 못함';
+  $('market-freshness').classList.toggle('stale', age > 4);
+  $('market-data-warning').textContent = !points.length ? 'QQQ 시장 데이터가 없어 비교 차트와 유사 구간을 표시할 수 없습니다.' : age > 4 ? '마지막 시장 관측값이 4일 이상 지났습니다. 최신값으로 오인하지 마세요.' : '';
+  $('market-data-warning').classList.toggle('error', !points.length || age > 4);
+  const risk = riskMetrics();
+  $('market-risk-score').textContent = risk.score.toFixed(0);
+  $('home-risk-score').textContent = `${risk.score.toFixed(0)} / 100`;
+  $('risk-components').innerHTML = `<div><span>시장 하락</span><strong>${risk.drawdown.toFixed(0)}</strong></div><div><span>자산 집중</span><strong>${risk.concentration.toFixed(0)}</strong></div><div><span>레버리지 노출</span><strong>${risk.leverage.toFixed(0)}</strong></div>`;
+  Object.entries(risk.weights).forEach(([key, value]) => { $(`risk-weight-${key}`).value = value; $(`risk-weight-${key}`).nextElementSibling.value = `${value}%`; });
+  const threeMonth = points.length > 63 ? Number(points.at(-1).value) / Number(points.at(-64).value) - 1 : null;
+  $('home-market-return').textContent = threeMonth === null ? '—' : signed(threeMonth);
+  $('home-market-asof').textContent = lastDate || '—';
+  $('market-bridge-status').textContent = lastDate ? `QQQ 조정가격 ${lastDate} 기준 · 위험점수는 확률이 아닌 상대 지표입니다.` : '시장 데이터 연결을 확인할 수 없습니다.';
+  renderMarketChart();
+  const analogs = calculateAnalogs(points);
+  $('market-analogs').innerHTML = analogs.length ? analogs.map(item => `<article class="analog-row"><strong>${item.date}<small>유사도 ${item.similarity.toFixed(0)}</small></strong><div><span>이후 3개월<b class="${item.r3 >= 0 ? 'positive' : 'negative'}">${signed(item.r3)}</b></span><span>이후 6개월<b class="${item.r6 >= 0 ? 'positive' : 'negative'}">${signed(item.r6)}</b></span><span>이후 12개월<b class="${item.r12 >= 0 ? 'positive' : 'negative'}">${signed(item.r12)}</b></span></div></article>`).join('') : '<p class="empty">유사 구간 계산에 필요한 장기 데이터가 부족합니다.</p>';
+}
+
 function renderStrategy(allocation) {
   const drawdown = cache.drawdown;
   const latestDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
@@ -319,6 +468,7 @@ function render() {
   cache = { ...cache, state, holdings };
   populateFilters();
   renderTransactions();
+  renderMarketAnalytics();
 }
 
 function renderAdjustments(balance) {
@@ -510,6 +660,33 @@ document.querySelector('[data-action="new-transaction"]').onclick = () => {
   setTimeout(() => $('ticker').focus(), 250);
 };
 $('theme-preference').onchange = event => applyTheme(event.target.value, true);
+applyDashboardLayout();
+$('edit-dashboard').onclick = () => { renderDashboardEditor(); $('dashboard-dialog').showModal(); };
+$('dashboard-card-editor').onclick = event => {
+  const direction = event.target.dataset.moveCard;
+  if (!direction) return;
+  const row = event.target.closest('[data-editor-card]');
+  const sibling = direction === 'up' ? row.previousElementSibling : row.nextElementSibling;
+  if (!sibling) return;
+  if (direction === 'up') row.parentElement.insertBefore(row, sibling); else row.parentElement.insertBefore(sibling, row);
+  renderDashboardEditor(editorLayout());
+};
+$('save-dashboard').onclick = () => { const layout = editorLayout(); localStorage.setItem(dashboardKey, JSON.stringify(layout)); applyDashboardLayout(layout); toast('상황실 카드 구성을 저장했습니다.'); };
+$('reset-dashboard').onclick = () => renderDashboardEditor(defaultDashboardLayout());
+document.querySelectorAll('[data-market-series]').forEach(input => { input.onchange = () => {
+  const selected = selectedMarketSeries();
+  if (selected.length > 3) { input.checked = false; $('market-selection-error').textContent = '지표는 최대 3개까지 선택할 수 있습니다.'; return; }
+  renderMarketChart();
+}; });
+$('market-period').onchange = renderMarketChart;
+$('market-normalization').onchange = renderMarketChart;
+['drawdown', 'concentration', 'leverage'].forEach(key => { $(`risk-weight-${key}`).oninput = event => {
+  event.target.nextElementSibling.value = `${event.target.value}%`;
+  const weights = Object.fromEntries(['drawdown', 'concentration', 'leverage'].map(name => [name, Number($(`risk-weight-${name}`).value)]));
+  localStorage.setItem(riskWeightKey, JSON.stringify(weights));
+  renderMarketAnalytics();
+}; });
+$('reset-risk-weights').onclick = () => { localStorage.setItem(riskWeightKey, JSON.stringify(defaultRiskWeights)); renderMarketAnalytics(); toast('위험 가중치를 기본값으로 복원했습니다.'); };
 document.querySelectorAll('[data-range]').forEach(element => { element.onclick = () => { range = element.dataset.range; document.querySelectorAll('[data-range]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); renderAllocationHistory(cache.snaps); }; });
 document.querySelectorAll('[data-performance-view]').forEach(element => { element.onclick = () => { performanceView = element.dataset.performanceView; document.querySelectorAll('[data-performance-view]').forEach(item => item.classList.toggle('active', item === element)); renderPerformance(cache.snaps); }; });
 document.querySelectorAll('.trade-type').forEach(element => { element.onclick = () => trade(element.dataset.type); });

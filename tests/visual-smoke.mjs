@@ -10,8 +10,12 @@ const { chromium } = require('C:/Users/glory/.cache/codex-runtimes/codex-primary
 const dist = resolve(import.meta.dirname, '../dist');
 const phase1aScreenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase1a');
 const phase1bScreenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase1b');
+const phase2Screenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase2');
+const phase3Screenshots = resolve(import.meta.dirname, '../docs/investment-intelligence/screenshots/phase3');
 await mkdir(phase1aScreenshots, { recursive: true });
 await mkdir(phase1bScreenshots, { recursive: true });
+await mkdir(phase2Screenshots, { recursive: true });
+await mkdir(phase3Screenshots, { recursive: true });
 const transactions = [
   { id: '11111111-1111-4111-8111-111111111111', traded_at: '2026-09-17T05:00:00Z', ticker: 'QLD', trade_type: 'BUY', quantity: 5, price: 87, amount: 435, fee: 1, memo: '' },
   { id: '22222222-2222-4222-8222-222222222222', traded_at: '2026-09-16T05:00:00Z', ticker: 'QQQ', trade_type: 'BUY', quantity: 2, price: 590, amount: 1180, fee: 1, memo: '' },
@@ -29,7 +33,10 @@ const snapshots = Array.from({ length: 12 }, (_, index) => ({
   twr_coverage_start: '2026-09-08',
 }));
 const settings = { targetQQQ: 10, targetQLD: 70, targetSGOV: 20, qqqTrigger1: -20, qqqTrigger1SgovPct: 50, qqqTrigger2: -30, qqqTrigger2RemainingPct: 100, qldRebalanceTrigger: 85 };
-const benchmark = snapshots.filter(item => item.twr_daily_return !== null).map((item, index) => ({ date: item.snapshot_date, value: 500 + index * 2 }));
+const benchmark = Array.from({ length: 680 }, (_, index) => ({
+  date: new Date(Date.UTC(2025, 0, 1 + index)).toISOString().slice(0, 10),
+  value: 500 + index * 0.24 + Math.sin(index / 18) * 22 + Math.sin(index / 61) * 35,
+}));
 const json = value => Buffer.from(JSON.stringify(value));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 let postedTransaction = null;
@@ -85,9 +92,51 @@ try {
     assert.equal(await page.locator('#cash-weight').count(), 0, `${viewport.name}: cash metric removed`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `${viewport.name}: horizontal overflow`);
     await page.screenshot({ path: join(phase1aScreenshots, `${viewport.name}-${viewport.theme}-home.png`), fullPage: true });
+    if (viewport.name === 'desktop') {
+      await page.locator('#edit-dashboard').click();
+      await page.locator('[data-editor-card="market"] input').uncheck();
+      await page.locator('#save-dashboard').click();
+      assert.equal(await page.locator('[data-dashboard-card="market"]').isVisible(), false, 'desktop: dashboard card hidden');
+      await page.reload({ waitUntil: 'networkidle' });
+      assert.equal(await page.locator('[data-dashboard-card="market"]').isVisible(), false, 'desktop: dashboard layout persists');
+      await page.locator('#edit-dashboard').click();
+      await page.locator('#reset-dashboard').click();
+      await page.locator('#save-dashboard').click();
+      assert.equal(await page.locator('[data-dashboard-card="market"]').isVisible(), true, 'desktop: dashboard reset');
+      await page.screenshot({ path: join(phase2Screenshots, 'desktop-light-command-center.png'), fullPage: true });
+    }
     if (viewport.name === 'mobile-390') {
+      await page.screenshot({ path: join(phase2Screenshots, 'mobile-390-dark-command-center.png'), fullPage: true });
       await page.locator('[data-action="new-transaction"]').click();
       assert.equal(await page.locator('#page-transactions').getAttribute('class'), 'page active', 'mobile: one-tap trade entry');
+      await page.locator('[data-page="home"]').click();
+    }
+    if (viewport.name === 'tablet-landscape') {
+      await page.locator('[data-page="market"]').click();
+      await page.locator('#market-comparison-chart svg').waitFor();
+      assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark', 'tablet landscape: market dark theme');
+      await page.screenshot({ path: join(phase3Screenshots, 'tablet-landscape-dark-market-analysis.png'), fullPage: true });
+      await page.locator('[data-page="home"]').click();
+    }
+    if (viewport.name === 'tablet-portrait') {
+      await page.locator('[data-page-link="market"]').first().click();
+      await page.locator('#market-comparison-chart svg').waitFor();
+      assert.equal(await page.locator('.analog-row').count(), 3, 'tablet: three historical analogs');
+      await page.locator('[data-market-series="equity"]').check();
+      await page.locator('#market-period').selectOption('90');
+      await page.locator('#market-normalization').selectOption('return');
+      assert.match(await page.locator('#market-chart-summary').textContent(), /누적 변화율/);
+      const scoreBefore = await page.locator('#market-risk-score').textContent();
+      await page.locator('#risk-weight-drawdown').fill('100');
+      await page.locator('#risk-weight-concentration').fill('0');
+      await page.locator('#risk-weight-leverage').fill('0');
+      const scoreAfter = await page.locator('#market-risk-score').textContent();
+      assert.notEqual(scoreAfter, scoreBefore, 'tablet: risk weights recalculate score');
+      assert.equal(await page.locator('#risk-weight-drawdown + output').textContent(), '100%', 'tablet: weight output');
+      assert.match(await page.locator('#market-freshness').textContent(), /종가 기준/);
+      await page.locator('#reset-risk-weights').click();
+      assert.equal(await page.locator('#risk-weight-drawdown + output').textContent(), '45%', 'tablet: default risk weights restored');
+      await page.screenshot({ path: join(phase3Screenshots, 'tablet-portrait-light-market-analysis.png'), fullPage: true });
       await page.locator('[data-page="home"]').click();
     }
     await page.locator('[data-performance-view="benchmark"]').click();
