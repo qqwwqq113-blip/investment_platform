@@ -451,7 +451,7 @@ function renderStrategy(allocation) {
   const advice = strategyAdvice({ drawdown, allocation, settings: cache.settings, qldCycleId });
   const execution = strategyExecutionStatus(advice, cache.rows);
   $('qqq-drawdown').textContent = drawdown ? signed(drawdown.current) : '데이터 없음';
-  $('qqq-peak').textContent = drawdown ? `전체 이력 최고 ${usd.format(drawdown.peak)} · ${drawdown.peakDate}${drawdown.historyStart ? ` · ${drawdown.historyStart} 이후 ${drawdown.observations}개 종가` : ''}` : 'QQQ 가격 이력을 불러오지 못했습니다.';
+  $('qqq-peak').textContent = drawdown ? `현재 ${usd.format(drawdown.latestPrice)} · ${drawdown.latestDate} · 전체 이력 최고 ${usd.format(drawdown.peak)} · ${drawdown.peakDate}${drawdown.historyStart ? ` · ${drawdown.historyStart} 이후 ${drawdown.observations}개 종가` : ''}` : 'QQQ 가격 이력을 불러오지 못했습니다.';
   $('strategy-title').textContent = advice.kind === 'NORMAL' ? '없음' : advice.title;
   $('strategy-detail').textContent = `${advice.detail}${execution.required ? ` · 실행 여부: ${execution.executed ? '기록 있음' : '미실행'}` : ''}`;
   $('strategy-pill').textContent = advice.kind === 'NORMAL' ? '정상' : '전략 점검';
