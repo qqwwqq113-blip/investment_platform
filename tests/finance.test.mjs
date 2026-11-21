@@ -20,7 +20,7 @@ import {
   validateTransaction,
   validateStrategy,
 } from '../finance.js';
-import { calculateMarketDrawdown, settlementBalance, validSettings as validServerSettings } from '../worker.js';
+import { calculateMarketDrawdown, marketDrawdownTimeline, settlementBalance, validSettings as validServerSettings } from '../worker.js';
 
 const row = (trade_type, ticker, quantity, price, amount, fee = 0, traded_at = '2026-01-01T00:00:00Z') => ({
   trade_type, ticker, quantity, price, amount, fee, traded_at,
@@ -176,6 +176,16 @@ test('QQQ 직전 최고는 종가가 아니라 해당 거래일의 일중 고가
   assert.equal(result.peak, 762.86);
   assert.equal(result.peakDate, '2026-10-06');
   assert.ok(Math.abs(result.current - (608.45 / 762.86 - 1)) < 1e-12);
+});
+
+test('QQQ 일별 낙폭 추이는 날짜별 누적 일중 최고가를 기준으로 계산한다', () => {
+  const result = marketDrawdownTimeline([
+    { date: '2026-10-05', close: 100, high: 101 },
+    { date: '2026-10-06', close: 104, high: 105 },
+    { date: '2026-10-07', close: 84, high: 90 },
+  ]);
+  assert.deepEqual(result.map(point => point.peak), [101, 105, 105]);
+  assert.ok(Math.abs(result.at(-1).drawdown + 0.2) < 1e-12);
 });
 
 test('QLD 85% 조건이 QQQ 트리거보다 우선한다', () => {

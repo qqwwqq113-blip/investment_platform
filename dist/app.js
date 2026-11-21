@@ -28,7 +28,7 @@ const reasonNames = { REGULAR_BUY: '정기매수', QQQ_DRAWDOWN_1: 'QQQ 1차 대
 const adjustmentReasonNames = { FEES_FX: '수수료·환전 차이', MISSING_FLOW: '누락된 입금·출금', DIVIDEND_INTEREST: '배당·이자', EXECUTION_ROUNDING: '체결·반올림 차이', OTHER: '기타 원장 보정' };
 let range = 'ALL';
 let performanceView = 'value';
-let cache = { rows: [], adjustments: [], snaps: [], holdings: [], state: null, allocation: null, drawdown: null, advice: null, settings: { ...STRATEGY_DEFAULTS }, benchmark: { basis: null, points: [] } };
+let cache = { rows: [], adjustments: [], snaps: [], holdings: [], state: null, allocation: null, drawdown: null, drawdownHistory: [], advice: null, settings: { ...STRATEGY_DEFAULTS }, benchmark: { basis: null, points: [] } };
 let quotes = {};
 let quotesFetchedAt = null;
 let editingId = null;
@@ -291,15 +291,47 @@ const defaultRiskWeights = { drawdown: 45, concentration: 35, leverage: 20 };
 function riskWeights() {
   try { return { ...defaultRiskWeights, ...JSON.parse(localStorage.getItem(riskWeightKey) || '{}') }; } catch { return { ...defaultRiskWeights }; }
 }
-function riskMetrics() {
-  const drawdown = Math.min(100, Math.abs(Number(cache.drawdown?.current || 0)) * 200);
-  const concentration = Math.min(100, Math.max(0, ...(cache.allocation?.rows || []).map(row => row.currentWeight)));
-  const exposure = nominalNasdaqExposure(cache.allocation || { total: 0, rows: [] }) * 100;
+function riskMetricsFor(allocation, currentDrawdown, weights = riskWeights()) {
+  const drawdown = Math.min(100, Math.abs(Number(currentDrawdown || 0)) * 200);
+  const concentration = Math.min(100, Math.max(0, ...(allocation?.rows || []).map(row => row.currentWeight)));
+  const exposure = nominalNasdaqExposure(allocation || { total: 0, rows: [] }) * 100;
   const leverage = Math.min(100, Math.max(0, exposure - 70) / 1.3);
-  const weights = riskWeights();
   const total = Math.max(1, weights.drawdown + weights.concentration + weights.leverage);
   const score = (drawdown * weights.drawdown + concentration * weights.concentration + leverage * weights.leverage) / total;
   return { score, drawdown, concentration, leverage, exposure, weights };
+}
+function riskMetrics() { return riskMetricsFor(cache.allocation, cache.drawdown?.current); }
+function riskTrendSeries() {
+  const market = [...(cache.drawdownHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
+  if (!market.length) return [];
+  let marketIndex = -1;
+  return [...cache.snaps].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date)).flatMap(snapshot => {
+    while (marketIndex + 1 < market.length && market[marketIndex + 1].date <= snapshot.snapshot_date) marketIndex += 1;
+    if (marketIndex < 0) return [];
+    const holdings = (Array.isArray(snapshot.holdings) ? snapshot.holdings : []).map(item => ({ ticker: item.ticker, value: Number(item.quantity) * Number(item.price) }));
+    const allocation = allocationMetrics(holdings, targets());
+    const metrics = riskMetricsFor(allocation, Number(market[marketIndex].drawdown));
+    return [{ date: snapshot.snapshot_date, ...metrics }];
+  });
+}
+function renderRiskTrend() {
+  const chart = $('risk-trend-chart');
+  const points = riskTrendSeries();
+  if (!points.length) {
+    chart.innerHTML = '<p class="empty">일별 위험점수 계산에 필요한 스냅샷이 없습니다.</p>';
+    $('risk-trend-summary').textContent = '일별 스냅샷이 쌓이면 추이를 표시합니다.';
+    return;
+  }
+  const width = 720, height = 230, padX = 34, padY = 24;
+  const start = new Date(`${points[0].date}T00:00:00Z`).getTime(), end = new Date(`${points.at(-1).date}T00:00:00Z`).getTime();
+  const x = date => padX + (new Date(`${date}T00:00:00Z`).getTime() - start) / Math.max(1, end - start) * (width - padX * 2);
+  const y = value => height - padY - value / 100 * (height - padY * 2);
+  const grid = [0, 25, 50, 75, 100].map(value => `<line x1="${padX}" x2="${width - padX}" y1="${y(value)}" y2="${y(value)}"/><text x="5" y="${y(value) + 4}">${value}</text>`).join('');
+  const line = points.map((point, index) => `${index ? 'L' : 'M'}${x(point.date).toFixed(1)},${y(point.score).toFixed(1)}`).join(' ');
+  const area = `${line} L${x(points.at(-1).date).toFixed(1)},${y(0)} L${x(points[0].date).toFixed(1)},${y(0)} Z`;
+  chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><g class="risk-grid-lines">${grid}</g><path class="risk-area" d="${area}"/><path class="risk-line" d="${line}"/>${points.map((point, index) => `<circle cx="${x(point.date)}" cy="${y(point.score)}" r="${index === points.length - 1 ? 4 : 2}"/>`).join('')}</svg>`;
+  $('risk-trend-summary').textContent = `${points[0].date} ~ ${points.at(-1).date} · ${points.length}개 일별 스냅샷`;
+  attachTooltip(chart, points, point => `<b>${point.date}</b><div>종합 위험점수 <b>${point.score.toFixed(0)}</b></div><div>시장 하락 ${point.drawdown.toFixed(0)} · 집중 ${point.concentration.toFixed(0)} · 레버리지 ${point.leverage.toFixed(0)}</div>`);
 }
 function portfolioIndexSeries() {
   let value = 100;
@@ -384,6 +416,7 @@ function renderMarketAnalytics() {
   $('home-risk-score').textContent = `${risk.score.toFixed(0)} / 100`;
   $('risk-components').innerHTML = `<div><span>시장 하락</span><strong>${risk.drawdown.toFixed(0)}</strong></div><div><span>자산 집중</span><strong>${risk.concentration.toFixed(0)}</strong></div><div><span>레버리지 노출</span><strong>${risk.leverage.toFixed(0)}</strong></div>`;
   Object.entries(risk.weights).forEach(([key, value]) => { $(`risk-weight-${key}`).value = value; $(`risk-weight-${key}`).nextElementSibling.value = `${value}%`; });
+  renderRiskTrend();
   const threeMonth = points.length > 63 ? Number(points.at(-1).value) / Number(points.at(-64).value) - 1 : null;
   $('home-market-return').textContent = threeMonth === null ? '—' : signed(threeMonth);
   $('home-market-asof').textContent = lastDate || '—';
@@ -585,6 +618,7 @@ async function load() {
   cache.adjustments = portfolioResponse.data.adjustments || [];
   cache.snaps = portfolioResponse.data.snapshots || [];
   cache.drawdown = strategyResponse.data?.drawdown || null;
+  cache.drawdownHistory = strategyResponse.data?.drawdownHistory || [];
   cache.benchmark = benchmarkResponse.data || { basis: null, points: [] };
   await loadQuotes(cache.rows);
   render();

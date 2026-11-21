@@ -304,10 +304,24 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
 .risk-components > div { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
 .risk-components span { color: var(--muted); font-size: .8rem; }
 .risk-components strong { color: var(--ink-strong); }
+.risk-method { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
+.risk-method summary { color: var(--accent-strong); font-weight: 700; cursor: pointer; }
+.risk-method div { padding-top: 8px; color: var(--muted); font-size: .84rem; line-height: 1.6; }
+.risk-method p { margin: 7px 0; }
+.risk-method ul { margin: 8px 0; padding-left: 20px; }
 .risk-weight-form { display: grid; gap: 12px; }
 .risk-weight-form label { grid-template-columns: 96px 1fr 42px; align-items: center; }
 .risk-weight-form input { min-height: 24px; padding: 0; accent-color: var(--accent); }
 .risk-weight-form output { color: var(--ink); font-size: .82rem; text-align: right; }
+.risk-trend-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 22px; }
+.risk-trend-heading h4 { margin: 0; color: var(--ink-strong); }
+.risk-trend-chart { position: relative; height: 230px; margin-top: 10px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(180deg, var(--surface-soft), var(--surface)); cursor: crosshair; touch-action: pan-y; }
+.risk-trend-chart svg { display: block; width: 100%; height: 100%; }
+.risk-grid-lines line { stroke: var(--border); stroke-width: 1; }
+.risk-grid-lines text { fill: var(--muted); font-size: 11px; }
+.risk-area { fill: color-mix(in srgb, var(--warning) 14%, transparent); }
+.risk-line { fill: none; stroke: var(--warning); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.risk-trend-chart circle { fill: var(--warning); }
 .market-analogs { display: grid; gap: 8px; margin-top: 14px; }
 .analog-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
 .analog-row > strong { color: var(--ink-strong); }

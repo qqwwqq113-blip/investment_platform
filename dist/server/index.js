@@ -170,9 +170,25 @@ export function calculateMarketDrawdown(history, settings = STRATEGY_DEFAULTS) {
   const latest = points.at(-1);
   return { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date, cycleId: `QQQ:${points[peakIndex].date}`, historyStart: points[0].date, historyEnd: latest.date, observations: points.length, peakScope: 'all_available_daily_history', peakBasis: 'daily_high' };
 }
+export function marketDrawdownTimeline(history, calendarDays = 730) {
+  const points = [...history]
+    .map(point => ({ date: String(point.date), close: Number(point.close), high: Number(point.high ?? point.close) }))
+    .filter(point => point.date && Number.isFinite(point.close) && point.close > 0 && Number.isFinite(point.high) && point.high > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!points.length) return [];
+  let peak = -Infinity;
+  const timeline = points.map(point => {
+    peak = Math.max(peak, point.high);
+    return { date: point.date, drawdown: point.close / peak - 1, peak };
+  });
+  const end = new Date(`${timeline.at(-1).date}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() - calendarDays);
+  const cutoff = end.toISOString().slice(0, 10);
+  return timeline.filter(point => point.date >= cutoff);
+}
 async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
   const points = await qqqDailyHistory();
-  return { drawdown: calculateMarketDrawdown(points, settings) };
+  return { drawdown: calculateMarketDrawdown(points, settings), drawdownHistory: marketDrawdownTimeline(points) };
 }
 async function linkedStrategyFields(env, input, previous = null) {
   const reason = input.reason || null;

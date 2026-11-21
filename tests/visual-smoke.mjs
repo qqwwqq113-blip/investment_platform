@@ -60,7 +60,7 @@ const server = createServer(async (request, response) => {
       SGOV: benchmark.map((point, index) => ({ date: point.date, value: 100 + index * 0.01 })),
     } })); return;
   }
-  if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' } })); return; }
+  if (request.url === '/api/strategy') { response.setHeader('content-type', 'application/json'); response.end(json({ drawdown: { peak: 700, peakDate: '2026-08-01', current: -0.213, cycleMinimum: -0.23, stage: 1, first20: '2026-09-10', latestPrice: 550.9, latestDate: '2026-09-18', cycleId: 'QQQ:2026-08-01' }, drawdownHistory: snapshots.map((snapshot, index) => ({ date: snapshot.snapshot_date, drawdown: -0.1 - index * 0.01 })) })); return; }
   if (request.url === '/api/quotes') { response.setHeader('content-type', 'application/json'); response.end(json({ fetchedAt: new Date().toISOString(), quotes: [{ ticker: 'QQQ', price: 600 }, { ticker: 'QLD', price: 91 }, { ticker: 'SGOV', price: 100.5 }] })); return; }
   if (request.url === '/api/transactions' && request.method === 'POST') {
     postRequestCount += 1;
@@ -153,6 +153,10 @@ try {
       await page.locator('#market-normalization').selectOption('return');
       assert.match(await page.locator('#market-chart-summary').textContent(), /누적 변화율/);
       const scoreBefore = await page.locator('#market-risk-score').textContent();
+      await page.locator('#risk-trend-chart svg').waitFor();
+      assert.match(await page.locator('#risk-trend-summary').textContent(), /일별 스냅샷/);
+      await page.locator('#risk-score-method').click();
+      assert.match(await page.locator('#risk-score-method').textContent(), /QQQ가 직전 일중 최고가/);
       await page.locator('#risk-weight-drawdown').fill('100');
       await page.locator('#risk-weight-concentration').fill('0');
       await page.locator('#risk-weight-leverage').fill('0');
