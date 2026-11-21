@@ -120,7 +120,8 @@ async function qqqDailyHistory() {
   const chunkMilliseconds = 8 * 365 * 86400000;
   const ranges = [];
   for (let from = start; from < end; from += chunkMilliseconds) ranges.push([from, Math.min(from + chunkMilliseconds, end)]);
-  const chunks = await Promise.all(ranges.map(async ([from, to]) => {
+  const chunks = [];
+  for (const [from, to] of ranges) {
     const period1 = Math.floor(from / 1000), period2 = Math.floor(to / 1000);
     const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/QQQ?period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits`, { headers: { 'user-agent': 'Mozilla/5.0 portfolio-dashboard' } });
     if (!response.ok) throw new Error('QQQ 전체 일봉 이력을 불러오지 못했습니다.');
@@ -135,13 +136,13 @@ async function qqqDailyHistory() {
     const currentTimestamp = Number(result?.meta?.regularMarketTime);
     const currentDate = Number.isFinite(currentTimestamp) ? new Date(currentTimestamp * 1000).toISOString().slice(0, 10) : null;
     const currentDay = currentDate ? rawPoints.find(point => point.date === currentDate) : null;
-    return {
+    chunks.push({
       points: rawPoints.filter(point => Number.isFinite(point.close) && point.close > 0 && Number.isFinite(point.high) && point.high > 0),
       current: currentDate && Number.isFinite(currentPrice) && currentPrice > 0
         ? { date: currentDate, close: currentPrice, high: Number.isFinite(currentDay?.high) && currentDay.high > 0 ? currentDay.high : currentPrice }
         : null,
-    };
-  }));
+    });
+  }
   const byDate = new Map(chunks.flatMap(chunk => chunk.points).map(point => [point.date, point]));
   const current = chunks.map(chunk => chunk.current).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date)).at(-1);
   if (current) byDate.set(current.date, current);
