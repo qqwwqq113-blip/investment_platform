@@ -112,15 +112,53 @@ async function marketHistory(ticker) {
   marketCache.set(ticker, { expires: Date.now() + 3600000, value: points });
   return points;
 }
-const qqqMarketHistory = () => marketHistory('QQQ');
+async function qqqDailyHistory() {
+  const cacheKey = 'QQQ:full-daily';
+  const cached = marketCache.get(cacheKey);
+  if (cached?.value && cached.expires > Date.now()) return cached.value;
+  const start = Date.UTC(1999, 2, 10);
+  const end = Date.now() + 86400000;
+  const chunkMilliseconds = 8 * 365 * 86400000;
+  const ranges = [];
+  for (let from = start; from < end; from += chunkMilliseconds) ranges.push([from, Math.min(from + chunkMilliseconds, end)]);
+  const chunks = await Promise.all(ranges.map(async ([from, to]) => {
+    const period1 = Math.floor(from / 1000), period2 = Math.floor(to / 1000);
+    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/QQQ?period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits`, { headers: { 'user-agent': 'Mozilla/5.0 portfolio-dashboard' } });
+    if (!response.ok) throw new Error('QQQ 전체 일봉 이력을 불러오지 못했습니다.');
+    const result = (await response.json())?.chart?.result?.[0];
+    const timestamps = result?.timestamp || [], quote = result?.indicators?.quote?.[0] || {};
+    const rawPoints = timestamps.map((timestamp, index) => ({
+      date: new Date(timestamp * 1000).toISOString().slice(0, 10),
+      close: Number(quote.close?.[index]),
+      high: Number(quote.high?.[index]),
+    }));
+    const currentPrice = Number(result?.meta?.regularMarketPrice);
+    const currentTimestamp = Number(result?.meta?.regularMarketTime);
+    const currentDate = Number.isFinite(currentTimestamp) ? new Date(currentTimestamp * 1000).toISOString().slice(0, 10) : null;
+    const currentDay = currentDate ? rawPoints.find(point => point.date === currentDate) : null;
+    return {
+      points: rawPoints.filter(point => Number.isFinite(point.close) && point.close > 0 && Number.isFinite(point.high) && point.high > 0),
+      current: currentDate && Number.isFinite(currentPrice) && currentPrice > 0
+        ? { date: currentDate, close: currentPrice, high: Number.isFinite(currentDay?.high) && currentDay.high > 0 ? currentDay.high : currentPrice }
+        : null,
+    };
+  }));
+  const byDate = new Map(chunks.flatMap(chunk => chunk.points).map(point => [point.date, point]));
+  const current = chunks.map(chunk => chunk.current).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date)).at(-1);
+  if (current) byDate.set(current.date, current);
+  const points = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  if (!points.length) throw new Error('QQQ 전체 일봉 이력이 없습니다.');
+  marketCache.set(cacheKey, { expires: Date.now() + 3600000, value: points });
+  return points;
+}
 export function calculateMarketDrawdown(history, settings = STRATEGY_DEFAULTS) {
   const points = [...history]
-    .map(point => ({ date: String(point.date), close: Number(point.close) }))
-    .filter(point => point.date && Number.isFinite(point.close) && point.close > 0)
+    .map(point => ({ date: String(point.date), close: Number(point.close), high: Number(point.high ?? point.close) }))
+    .filter(point => point.date && Number.isFinite(point.close) && point.close > 0 && Number.isFinite(point.high) && point.high > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
   if (!points.length) return null;
   let peak = -Infinity, peakIndex = 0;
-  points.forEach((point, index) => { if (point.close >= peak) { peak = point.close; peakIndex = index; } });
+  points.forEach((point, index) => { if (point.high >= peak) { peak = point.high; peakIndex = index; } });
   let minimum = 0, first20 = null, first30 = null;
   for (const point of points.slice(peakIndex)) {
     const drawdown = point.close / peak - 1;
@@ -129,10 +167,10 @@ export function calculateMarketDrawdown(history, settings = STRATEGY_DEFAULTS) {
     if (!first30 && drawdown <= Number(settings.qqqTrigger2) / 100 + 1e-10) first30 = point.date;
   }
   const latest = points.at(-1);
-  return { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date, cycleId: `QQQ:${points[peakIndex].date}`, historyStart: points[0].date, historyEnd: latest.date, observations: points.length, peakScope: 'all_available_history' };
+  return { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date, cycleId: `QQQ:${points[peakIndex].date}`, historyStart: points[0].date, historyEnd: latest.date, observations: points.length, peakScope: 'all_available_daily_history', peakBasis: 'daily_high' };
 }
 async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
-  const points = await qqqMarketHistory();
+  const points = await qqqDailyHistory();
   return { drawdown: calculateMarketDrawdown(points, settings) };
 }
 async function linkedStrategyFields(env, input, previous = null) {

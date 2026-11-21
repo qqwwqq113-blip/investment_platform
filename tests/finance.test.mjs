@@ -154,15 +154,28 @@ test('QQQ 트리거는 같은 사이클에서 한 번 결정되고 신고점에�
 
 test('서버 QQQ MDD는 9월 이전을 포함한 전체 가용 이력의 전고점을 사용한다', () => {
   const result = calculateMarketDrawdown([
-    { date: '2026-08-15', close: 800 },
-    { date: '2026-09-01', close: 739.77 },
+    { date: '2026-08-15', close: 800, high: 810 },
+    { date: '2026-09-01', close: 739.77, high: 745 },
     { date: '2026-11-20', close: 600 },
   ]);
-  assert.equal(result.peak, 800);
+  assert.equal(result.peak, 810);
   assert.equal(result.peakDate, '2026-08-15');
   assert.equal(result.historyStart, '2026-08-15');
   assert.equal(result.observations, 3);
-  assert.ok(Math.abs(result.current + 0.25) < 1e-12);
+  assert.equal(result.peakBasis, 'daily_high');
+  assert.ok(Math.abs(result.current - (600 / 810 - 1)) < 1e-12);
+});
+
+test('QQQ 직전 최고는 종가가 아니라 해당 거래일의 일중 고가를 사용한다', () => {
+  const result = calculateMarketDrawdown([
+    { date: '2026-10-05', close: 756.2, high: 758.1 },
+    { date: '2026-10-06', close: 759.66, high: 762.86 },
+    { date: '2026-10-07', close: 757.73, high: 761.4 },
+    { date: '2026-11-20', close: 608.45, high: 612.2 },
+  ]);
+  assert.equal(result.peak, 762.86);
+  assert.equal(result.peakDate, '2026-10-06');
+  assert.ok(Math.abs(result.current - (608.45 / 762.86 - 1)) < 1e-12);
 });
 
 test('QLD 85% 조건이 QQQ 트리거보다 우선한다', () => {
