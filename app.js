@@ -5,16 +5,15 @@ import {
   benchmarkComparison,
   currentQldCycleId,
   enrichHoldings,
-  maximumDrawdownFromReturns,
   nominalNasdaqExposure,
   normalizeStrategy,
+  performanceForRange,
   portfolioState,
   sgovCapacity,
   strategyAdvice,
   strategyExecutionStatus,
   strategyFromLegacyTargets,
   strategyTargets,
-  twrFromSnapshots,
   validateTransaction,
   validateStrategy,
 } from './finance.js';
@@ -105,9 +104,11 @@ function localStrategyFallback() {
 
 function filtered(snaps) {
   if (range === 'ALL') return snaps;
-  const today = new Date();
-  const start = range === 'YTD' ? new Date(today.getFullYear(), 0, 1) : new Date(today.getTime() - Number(range) * 86400000);
-  return snaps.filter(item => new Date(`${item.snapshot_date}T00:00:00+09:00`) >= start);
+  const latestDate = [...snaps].map(item => item.snapshot_date).filter(Boolean).sort().at(-1);
+  if (!latestDate) return [];
+  const latest = new Date(`${latestDate}T00:00:00Z`);
+  const start = range === 'YTD' ? new Date(Date.UTC(latest.getUTCFullYear(), 0, 1)) : new Date(latest.getTime() - Number(range) * 86400000);
+  return snaps.filter(item => new Date(`${item.snapshot_date}T00:00:00Z`) >= start);
 }
 
 function donut(id, items, label, centerText) {
@@ -144,12 +145,14 @@ function attachTooltip(chart, points, markup) {
 function renderPerformance(snaps) {
   const points = filtered([...snaps].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date)));
   const chart = $('history-chart');
-  const twr = twrFromSnapshots(points);
-  const mdd = maximumDrawdownFromReturns(points);
-  $('period-twr').textContent = twr.available ? signed(twr.value) : '측정 준비 중';
-  $('performance-twr').textContent = twr.available ? signed(twr.value) : '—';
-  $('performance-mdd').textContent = mdd.available ? signed(mdd.value) : '—';
-  $('twr-coverage').textContent = twr.available ? `${twr.startDate}부터 측정` : '정확한 측정 데이터가 아직 없습니다.';
+  const performance = performanceForRange(snaps, range);
+  $('period-twr').textContent = performance.available ? signed(performance.value) : '측정 준비 중';
+  $('performance-twr').textContent = performance.available ? signed(performance.value) : '—';
+  $('performance-mdd').textContent = performance.available ? signed(performance.mdd) : '—';
+  $('twr-coverage').textContent = performance.available ? `${performance.startDate}부터 ${performance.observations}구간` : '측정 가능한 스냅샷이 아직 없습니다.';
+  $('performance-period-note').textContent = performance.available
+    ? `실제 계산 ${performance.startDate} ~ ${performance.endDate} · ${performance.observations}개 수익 구간${performance.derivedObservations ? ` · 이전 ${performance.derivedObservations}개 구간은 평가액·순입금 변화로 연결` : ' · 저장된 일별 TWR 사용'}`
+    : '선택 기간에 계산 가능한 수익 구간이 없습니다.';
   if (!points.length) { chart.innerHTML = '<p class="empty">선택한 기간의 스냅샷이 없습니다.</p>'; renderBenchmark(); return; }
   const values = points.flatMap(point => [Number(point.total_equity), Number(point.net_contributions ?? point.total_cost)]);
   const lo = Math.min(...values), hi = Math.max(...values), pad = Math.max((hi - lo) * 0.12, 1);
@@ -175,12 +178,11 @@ function renderBenchmark() {
   $('benchmark-chart-panel').classList.toggle('hidden', performanceView !== 'benchmark');
   if (performanceView !== 'benchmark') return;
   const chart = $('benchmark-chart');
-  const snaps = filtered([...cache.snaps].sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date)));
-  const comparison = benchmarkComparison(snaps, cache.benchmark.points);
+  const comparison = benchmarkComparison(cache.snaps, cache.benchmark.points, range);
   const basisLabel = cache.benchmark.basis === 'adjusted_close' ? '배당 반영 QQQ' : 'QQQ 가격수익률';
   $('benchmark-label').textContent = basisLabel;
-  $('benchmark-summary').textContent = comparison.available ? `${comparison.startDate} 공통 시작일 = 100 · ${basisLabel}` : '공통 유효 기간의 벤치마크 데이터가 없습니다.';
-  if (!comparison.available) { chart.innerHTML = '<p class="empty">비교 가능한 데이터가 없습니다.</p>'; return; }
+  $('benchmark-summary').textContent = comparison.available ? `${comparison.startDate} 공통 시작일 = 100 · ${comparison.observations}개 관측값 · ${basisLabel}` : comparison.observations === 1 ? '공통 관측값이 1개뿐이라 추세선을 표시할 수 없습니다.' : '공통 유효 기간의 벤치마크 데이터가 없습니다.';
+  if (!comparison.available) { chart.innerHTML = `<p class="empty">${comparison.observations === 1 ? '추세 비교에는 최소 2개의 공통 관측값이 필요합니다.' : '비교 가능한 데이터가 없습니다.'}</p>`; return; }
   const points = comparison.points, w = 720, h = 250;
   const values = points.flatMap(point => [point.portfolio, point.benchmark]);
   const lo = Math.min(...values), hi = Math.max(...values), pad = Math.max((hi - lo) * 0.12, 1);
@@ -449,7 +451,7 @@ function renderStrategy(allocation) {
   const advice = strategyAdvice({ drawdown, allocation, settings: cache.settings, qldCycleId });
   const execution = strategyExecutionStatus(advice, cache.rows);
   $('qqq-drawdown').textContent = drawdown ? signed(drawdown.current) : '데이터 없음';
-  $('qqq-peak').textContent = drawdown ? `직전 최고 ${usd.format(drawdown.peak)} · ${drawdown.peakDate}` : 'QQQ 가격 이력을 불러오지 못했습니다.';
+  $('qqq-peak').textContent = drawdown ? `전체 이력 최고 ${usd.format(drawdown.peak)} · ${drawdown.peakDate}${drawdown.historyStart ? ` · ${drawdown.historyStart} 이후 ${drawdown.observations}개 종가` : ''}` : 'QQQ 가격 이력을 불러오지 못했습니다.';
   $('strategy-title').textContent = advice.kind === 'NORMAL' ? '없음' : advice.title;
   $('strategy-detail').textContent = `${advice.detail}${execution.required ? ` · 실행 여부: ${execution.executed ? '기록 있음' : '미실행'}` : ''}`;
   $('strategy-pill').textContent = advice.kind === 'NORMAL' ? '정상' : '전략 점검';
@@ -467,8 +469,8 @@ function renderStrategy(allocation) {
   $('sgov-capacity').textContent = usd.format(capacity.current);
   $('sgov-capacity-detail').textContent = `1차 ${cache.settings.qqqTrigger1}%: ${usd.format(capacity.first)} · 2차 ${cache.settings.qqqTrigger2}%: ${usd.format(capacity.second)}`;
   const qld = allocation.rows.find(row => row.ticker === 'QLD')?.currentWeight || 0;
-  const mdd = maximumDrawdownFromReturns(filtered(cache.snaps));
-  $('risk-summary').textContent = `MDD ${mdd.available ? signed(mdd.value) : '—'}`;
+  const periodPerformance = performanceForRange(cache.snaps, range);
+  $('risk-summary').textContent = `MDD ${periodPerformance.available ? signed(periodPerformance.mdd) : '—'}`;
   $('risk-detail').textContent = `QQQ ${drawdown ? signed(drawdown.current) : '—'} · QLD ${qld.toFixed(1)}% / ${cache.settings.qldRebalanceTrigger}%`;
   cache.advice = advice;
   return advice;

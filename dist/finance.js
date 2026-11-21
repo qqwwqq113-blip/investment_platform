@@ -175,8 +175,77 @@ function exactTwrRows(snapshots) {
   const coverageStart = ordered.at(-1)?.twr_coverage_start || null;
   return ordered.filter(row =>
     (!coverageStart || String(row.snapshot_date) >= String(coverageStart)) &&
+    row.twr_daily_return !== null && row.twr_daily_return !== '' &&
     Number.isFinite(Number(row.twr_daily_return))
   );
+}
+
+function rangeStartDate(latestDate, range) {
+  if (!latestDate || range === 'ALL') return null;
+  const latest = new Date(`${latestDate}T00:00:00Z`);
+  if (range === 'YTD') return `${latest.getUTCFullYear()}-01-01`;
+  const days = Number(range);
+  if (!Number.isFinite(days)) return null;
+  latest.setUTCDate(latest.getUTCDate() - days);
+  return latest.toISOString().slice(0, 10);
+}
+
+export function linkedReturnRows(snapshots) {
+  const ordered = [...snapshots]
+    .filter(row => row.snapshot_date)
+    .sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+  const coverageStart = ordered.at(-1)?.twr_coverage_start || null;
+  return ordered.flatMap((row, index) => {
+    const hasExact = row.twr_daily_return !== null && row.twr_daily_return !== '' && Number.isFinite(Number(row.twr_daily_return));
+    const exact = Number(row.twr_daily_return);
+    if ((!coverageStart || String(row.snapshot_date) >= String(coverageStart)) && hasExact) {
+      return [{ snapshot_date: row.snapshot_date, return: exact, source: 'exact' }];
+    }
+    const previous = ordered[index - 1];
+    if (!previous) return [];
+    const previousEquity = Number(previous.total_equity);
+    const currentEquity = Number(row.total_equity);
+    const previousContributions = Number(previous.net_contributions ?? previous.total_cost);
+    const currentContributions = Number(row.net_contributions ?? row.total_cost);
+    if (![previousEquity, currentEquity, previousContributions, currentContributions].every(Number.isFinite) || previousEquity <= 0) return [];
+    const externalFlow = currentContributions - previousContributions;
+    const value = (currentEquity - externalFlow) / previousEquity - 1;
+    return Number.isFinite(value) && value > -1
+      ? [{ snapshot_date: row.snapshot_date, return: value, source: 'derived' }]
+      : [];
+  });
+}
+
+export function performanceForRange(snapshots, range = 'ALL') {
+  const ordered = [...snapshots]
+    .filter(row => row.snapshot_date)
+    .sort((a, b) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+  const latestDate = ordered.at(-1)?.snapshot_date || null;
+  const requestedStartDate = rangeStartDate(latestDate, range);
+  const rows = linkedReturnRows(ordered).filter(row => !requestedStartDate || String(row.snapshot_date) >= requestedStartDate);
+  if (!rows.length) return {
+    available: false, value: null, mdd: null, startDate: null, endDate: latestDate,
+    requestedStartDate, observations: 0, derivedObservations: 0, rows: [],
+  };
+  let factor = 1;
+  let peak = 1;
+  let maximumDrawdown = 0;
+  for (const row of rows) {
+    factor *= 1 + row.return;
+    peak = Math.max(peak, factor);
+    maximumDrawdown = Math.min(maximumDrawdown, factor / peak - 1);
+  }
+  return {
+    available: true,
+    value: factor - 1,
+    mdd: maximumDrawdown,
+    startDate: rows[0].snapshot_date,
+    endDate: rows.at(-1).snapshot_date,
+    requestedStartDate,
+    observations: rows.length,
+    derivedObservations: rows.filter(row => row.source === 'derived').length,
+    rows,
+  };
 }
 
 export function twrFromSnapshots(snapshots) {
@@ -328,19 +397,19 @@ export function currentQldCycleId(snapshots, currentWeight, threshold, currentDa
   return `QLD:${start || currentDate}`;
 }
 
-export function benchmarkComparison(snapshots, benchmarkPoints) {
-  const returns = exactTwrRows(snapshots);
+export function benchmarkComparison(snapshots, benchmarkPoints, range = 'ALL') {
+  const returns = performanceForRange(snapshots, range).rows;
   let portfolioIndex = 1;
   const portfolio = new Map();
   for (const row of returns) {
-    portfolioIndex *= 1 + Number(row.twr_daily_return);
+    portfolioIndex *= 1 + Number(row.return);
     portfolio.set(String(row.snapshot_date), portfolioIndex);
   }
   const benchmark = new Map((benchmarkPoints || [])
     .map(point => [String(point.date), Number(point.value)])
     .filter(([, value]) => Number.isFinite(value) && value > 0));
   const dates = [...portfolio.keys()].filter(date => benchmark.has(date)).sort();
-  if (!dates.length) return { available: false, points: [], startDate: null };
+  if (dates.length < 2) return { available: false, points: [], startDate: dates[0] || null, observations: dates.length };
   const firstPortfolio = portfolio.get(dates[0]);
   const firstBenchmark = benchmark.get(dates[0]);
   const points = dates.map(date => {
@@ -348,7 +417,7 @@ export function benchmarkComparison(snapshots, benchmarkPoints) {
     const benchmarkValue = benchmark.get(date) / firstBenchmark * 100;
     return { date, portfolio: portfolioValue, benchmark: benchmarkValue, excess: portfolioValue / benchmarkValue - 1 };
   });
-  return { available: true, points, startDate: dates[0] };
+  return { available: true, points, startDate: dates[0], observations: dates.length };
 }
 
 export function validateTransaction(input, currentState) {

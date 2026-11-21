@@ -112,8 +112,12 @@ async function marketHistory(ticker) {
   return points;
 }
 const qqqMarketHistory = () => marketHistory('QQQ');
-async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
-  const points = await qqqMarketHistory();
+export function calculateMarketDrawdown(history, settings = STRATEGY_DEFAULTS) {
+  const points = [...history]
+    .map(point => ({ date: String(point.date), close: Number(point.close) }))
+    .filter(point => point.date && Number.isFinite(point.close) && point.close > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!points.length) return null;
   let peak = -Infinity, peakIndex = 0;
   points.forEach((point, index) => { if (point.close >= peak) { peak = point.close; peakIndex = index; } });
   let minimum = 0, first20 = null, first30 = null;
@@ -124,7 +128,11 @@ async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
     if (!first30 && drawdown <= Number(settings.qqqTrigger2) / 100 + 1e-10) first30 = point.date;
   }
   const latest = points.at(-1);
-  return { drawdown: { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date, cycleId: `QQQ:${points[peakIndex].date}` } };
+  return { peak, peakDate: points[peakIndex].date, current: latest.close / peak - 1, cycleMinimum: minimum, stage: first30 ? 2 : first20 ? 1 : 0, first20, first30, latestPrice: latest.close, latestDate: latest.date, cycleId: `QQQ:${points[peakIndex].date}`, historyStart: points[0].date, historyEnd: latest.date, observations: points.length, peakScope: 'all_available_history' };
+}
+async function qqqStrategy(settings = STRATEGY_DEFAULTS) {
+  const points = await qqqMarketHistory();
+  return { drawdown: calculateMarketDrawdown(points, settings) };
 }
 async function linkedStrategyFields(env, input, previous = null) {
   const reason = input.reason || null;
