@@ -264,7 +264,7 @@ async function api(request, env, url) {
   }
   if (url.pathname === '/api/benchmark' && request.method === 'GET') {
     try {
-      const history = await qqqMarketHistory();
+      const history = await marketHistory('QQQ');
       const adjustedAvailable = history.some(point => Number.isFinite(point.adjusted) && point.adjusted > 0);
       return json({
         basis: adjustedAvailable ? 'adjusted_close' : 'close',
